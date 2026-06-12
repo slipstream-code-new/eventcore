@@ -17,7 +17,7 @@ permissions:
 jobs:
   release-pr:
     name: Create/Update Release PR
-    runs-on: ubuntu-latest
+    runs-on: docker
     # Skip if this is a release PR merge (to avoid infinite loops)
     if: "!startsWith(github.event.head_commit.message, 'chore: release')"
 
@@ -25,9 +25,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # Fetch all history for changelog generation
+          fetch-depth: 0 # Fetch all history for changelog generation
           # Use PAT to allow release PR to trigger CI workflows
-          # See: https://release-plz.dev/docs/github/token
+          # The auto-provided GITHUB_TOKEN does not trigger downstream runs
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
 
       - name: Install Rust toolchain
@@ -49,7 +49,6 @@ jobs:
       - name: Create/update release PR
         env:
           # Use PAT instead of GITHUB_TOKEN to trigger CI on release PR
-          # See: https://release-plz.dev/docs/github/token
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
         run: |
           # release-plz creates/updates PR with version bumps and changelog
@@ -57,5 +56,5 @@ jobs:
           # (see workspace Cargo.toml and ADR-025)
           release-plz release-pr \
             --git-token "$GITHUB_TOKEN" \
-            --backend github \
+            --backend gitea \
             --config ./release-plz.toml

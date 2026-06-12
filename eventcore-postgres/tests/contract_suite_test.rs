@@ -16,8 +16,9 @@ use uuid::Uuid;
 static POSTGRES_CONTAINER: OnceLock<()> = OnceLock::new();
 
 fn ensure_postgres_running() {
-    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
-    let connection_string = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
+    let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
+    let connection_string = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
 
     if can_connect_to_postgres(&connection_string) {
         eprintln!("Postgres already available at {}", connection_string);
@@ -99,8 +100,9 @@ impl IsolatedPostgresFixture {
             ensure_postgres_running();
         });
 
-        let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
-        let admin_conn_string = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
+        let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+        let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
+        let admin_conn_string = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
 
         let admin_pool = PgPoolOptions::new()
             .max_connections(1)
@@ -116,8 +118,8 @@ impl IsolatedPostgresFixture {
             .expect("Failed to create isolated database");
 
         let connection_string = format!(
-            "postgres://postgres:postgres@localhost:{}/{}",
-            port, database_name
+            "postgres://postgres:postgres@{}:{}/{}",
+            host, port, database_name
         );
 
         let store = PostgresEventStore::new(connection_string.clone())

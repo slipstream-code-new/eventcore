@@ -6,7 +6,7 @@ use crate::config::BackendChoice;
 
 /// Create the postgres connection string from environment variables.
 pub fn postgres_connection_string() -> String {
-    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
     let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
     let user = env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string());
     let password = env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "postgres".to_string());

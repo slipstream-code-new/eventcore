@@ -29,13 +29,14 @@
 14. Integration tests must read like docs — Given/When/Then comments, only public APIs, no private hooks or mocks of internals.
 15. Duplication inside tests is acceptable when it mirrors how downstream users compose commands and stores.
 16. Prefer existing tracing/logging helpers over ad-hoc `println!` debugging noise.
-17. All work items are tracked in **GitHub Issues**; use GitHub MCP tools for automation.
+17. All work items are tracked in **Forgejo Issues** at `git.johnwilger.com/jwilger/eventcore`; use the `tea` CLI or direct REST calls for automation.
 18. Keep pre-commit hooks green: rerun fmt/clippy/nextest locally until clean before committing.
 19. Use Conventional Commits for all git commit messages and PR titles (type/scope: summary) so history stays machine-readable.
 
-## Issue Tracking with GitHub Issues
+## Issue Tracking with Forgejo Issues
 
-**IMPORTANT**: This project uses **GitHub Issues** for ALL issue tracking.
+**IMPORTANT**: This project uses **Forgejo Issues** for ALL issue tracking,
+hosted at `git.johnwilger.com/jwilger/eventcore`.
 
 ### Labels
 
@@ -59,31 +60,37 @@
 
 ### Quick Reference
 
+The `tea` CLI (Forgejo's official client) is the recommended interface. It
+must be configured once with a Forgejo PAT via `tea login add`. Direct
+`curl` calls to `/api/v1/repos/jwilger/eventcore/...` are equivalent and
+work without `tea` installed.
+
 **Check for work:**
 
 ```bash
-gh issue list --label "P1-high"     # High priority issues
-gh issue list --assignee @me        # Your assigned issues
-gh issue list --state open          # All open issues
+tea issues list --labels "P1-high"     # High priority issues
+tea issues list --assignee @me         # Your assigned issues
+tea issues list --state open           # All open issues
 ```
 
 **Create issues:**
 
 ```bash
-gh issue create --title "Issue title" --label "enhancement" --label "P2-medium"
+tea issues create --title "Issue title" --labels "enhancement,P2-medium"
 ```
 
 **Claim and update:**
 
 ```bash
-gh issue edit 42 --add-assignee @me
-gh issue comment 42 --body "Starting work on this"
+tea issues edit 42 --assignees @me
+tea comment 42 "Starting work on this"
 ```
 
 **Complete work:**
 
 ```bash
-gh issue close 42 --comment "Completed in #PR_NUMBER"
+tea issues close 42
+tea comment 42 "Completed in #PR_NUMBER"
 ```
 
 ## Git Workflow
@@ -94,5 +101,6 @@ This project uses standard feature branches with squash merges.
 
 1. Create a feature branch: `git checkout -b type/description`
 2. Make commits using Conventional Commits
-3. Push and create a PR: `git push -u origin <branch>` then `gh pr create`
+3. Push and create a PR: `git push -u origin <branch>` then `tea pr create`
+   (or open the PR via the Forgejo web UI link printed by `git push`)
 4. PRs are squash-merged into `main`

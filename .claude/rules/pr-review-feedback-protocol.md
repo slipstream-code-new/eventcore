@@ -106,9 +106,14 @@ When a PR review contains inline comments (review threads), reply to EVERY
 thread after addressing the feedback. This allows the reviewer to read the
 response and resolve the thread.
 
-- Use `get_review_comments` to retrieve threads and their comment IDs.
-- Use `add_reply_to_pull_request_comment` (GitHub MCP tool) with the numeric
-  comment ID to post replies to inline review threads.
+- Fetch review comments via the Forgejo REST API:
+  `GET /api/v1/repos/jwilger/eventcore/pulls/{index}/reviews/{review_id}/comments`
+  (or use `tea pulls review` to list them).
+- Reply to each comment via
+  `POST /api/v1/repos/jwilger/eventcore/issues/comments/{id}/reactions`
+  for acknowledgements, or open a new review with replies via
+  `POST /api/v1/repos/jwilger/eventcore/pulls/{index}/reviews`
+  with `body` and per-comment replies in the `comments[]` array.
 - The reply should briefly explain what was changed, or acknowledge the feedback
   if it led to a guardrail update rather than an immediate code fix.
 - Do NOT leave review threads without a reply — silent fixes force the reviewer
