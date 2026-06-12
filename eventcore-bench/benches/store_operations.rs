@@ -284,8 +284,9 @@ fn bench_read_stream_postgres(c: &mut Criterion) {
 fn try_create_postgres_store(
     rt: &tokio::runtime::Runtime,
 ) -> Option<eventcore_postgres::PostgresEventStore> {
-    let port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
-    let url = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
+    let host = std::env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
+    let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
 
     rt.block_on(async {
         match eventcore_postgres::PostgresEventStore::new(url).await {

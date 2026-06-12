@@ -17,7 +17,7 @@ env:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-latest
+    runs-on: docker
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
     steps:
@@ -32,28 +32,17 @@ jobs:
               - '**/Cargo.toml'
               - '**/Cargo.lock'
               - 'rust-toolchain.toml'
-              - '.github/workflows/ci.yml'
+              - '.forgejo/workflows/ci.yml'
 
   test:
     name: Test
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust:
-          - stable
-          - beta
-          - nightly
-        postgres:
-          - 15
-          - 16
-          - 17
-          - 18
+    runs-on: docker
 
     services:
       postgres:
-        image: postgres:${{ matrix.postgres }}
+        image: postgres:17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -63,16 +52,12 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        ports:
-          - 5432:5432
 
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
@@ -84,17 +69,21 @@ jobs:
 
       - name: Run tests
         env:
-          POSTGRES_VERSION: ${{ matrix.postgres }}
+          POSTGRES_VERSION: "17"
+          POSTGRES_HOST: postgres
+          POSTGRES_PORT: "5432"
         run: cargo nextest run --workspace --all-features
 
       - name: Run doctests
         env:
-          POSTGRES_VERSION: ${{ matrix.postgres }}
+          POSTGRES_VERSION: "17"
+          POSTGRES_HOST: postgres
+          POSTGRES_PORT: "5432"
         run: cargo test --doc --workspace --all-features
 
   format:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: docker
     steps:
       - uses: actions/checkout@v6
 
@@ -110,7 +99,7 @@ jobs:
     name: Clippy
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: docker
     steps:
       - uses: actions/checkout@v6
 
@@ -131,7 +120,7 @@ jobs:
     if: >-
       needs.changes.outputs.rust == 'true' &&
       contains(github.event.pull_request.labels.*.name, 'release')
-    runs-on: ubuntu-latest
+    runs-on: docker
     services:
       postgres:
         image: postgres:17
@@ -144,8 +133,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        ports:
-          - 5432:5432
 
     steps:
       - uses: actions/checkout@v6
@@ -168,15 +155,17 @@ jobs:
         id: mutants
         env:
           POSTGRES_VERSION: 17
+          POSTGRES_HOST: postgres
+          POSTGRES_PORT: "5432"
         run: |
           cargo mutants --workspace 2>&1 | tee mutation-output.txt
-          MUTANTS_EXIT=$?
-          if [ $MUTANTS_EXIT -ne 0 ]; then
+          MUTANTS_EXIT=${PIPESTATUS[0]}
+          if [ "$MUTANTS_EXIT" -ne 0 ]; then
             echo "has_survivors=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_survivors=false" >> "$GITHUB_OUTPUT"
           fi
-          exit $MUTANTS_EXIT
+          exit "$MUTANTS_EXIT"
         continue-on-error: true
 
       - name: Upload mutation report
@@ -190,72 +179,66 @@ jobs:
 
       - name: Create issues for surviving mutants
         if: steps.mutants.outputs.has_survivors == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const output = fs.readFileSync('mutation-output.txt', 'utf8');
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
 
-            const survivors = output
-              .split('\n')
-              .filter(line => line.startsWith('SURVIVED'))
-              .map(line => line.trim());
+          # Group SURVIVED lines by source file
+          declare -A by_file
+          while IFS= read -r line; do
+            file=$(printf '%s\n' "$line" | sed -n 's/^SURVIVED:[[:space:]]\+\(.*\.rs\):[0-9].*/\1/p')
+            [ -z "$file" ] && continue
+            by_file["$file"]+="${line}"$'\n'
+          done < <(grep '^SURVIVED' mutation-output.txt || true)
 
-            if (survivors.length === 0) {
-              console.log('No surviving mutants found in output');
-              return;
-            }
+          if [ "${#by_file[@]}" -eq 0 ]; then
+            echo "No surviving mutants parsed from output"
+            exit 0
+          fi
 
-            const byFile = {};
-            for (const line of survivors) {
-              const match = line.match(/SURVIVED:\s+(.+?\.rs):\d+/);
-              const file = match ? match[1] : 'unknown';
-              if (!byFile[file]) byFile[file] = [];
-              byFile[file].push(line);
-            }
+          api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/issues"
 
-            const prNumber = context.payload.pull_request.number;
+          for file in "${!by_file[@]}"; do
+            mutants="${by_file[$file]}"
+            count=$(printf '%s' "$mutants" | grep -c '^SURVIVED' || true)
 
-            for (const [file, mutants] of Object.entries(byFile)) {
-              const mutantList = mutants
-                .map(m => `- \`${m}\``)
-                .join('\n');
+            mutant_list=$(printf '%s' "$mutants" | sed -e 's/^/- `/' -e 's/$/`/')
 
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: `mutant: surviving mutants in ${file}`,
-                labels: ['P0-critical', 'bug'],
-                body: [
-                  `## Surviving Mutants`,
-                  ``,
-                  `Mutation testing found **${mutants.length} surviving mutant(s)** in \`${file}\`.`,
-                  `Detected during release PR #${prNumber}.`,
-                  ``,
-                  `### Mutants`,
-                  ``,
-                  mutantList,
-                  ``,
-                  `### What This Means`,
-                  ``,
-                  `Each surviving mutant represents a code change that no test caught.`,
-                  `This indicates a gap in test coverage that could allow bugs to ship undetected.`,
-                  ``,
-                  `### How to Fix`,
-                  ``,
-                  `1. For each mutant, write a test that fails when the mutation is applied`,
-                  `2. Run \`cargo mutants --file ${file}\` locally to verify the fix`,
-                  `3. All mutants must be killed before the next release`,
-                  ``,
-                  `### Context`,
-                  ``,
-                  `- Release PR: #${prNumber}`,
-                  `- Full mutation report: see workflow artifacts`,
-                ].join('\n'),
-              });
+            title="mutant: surviving mutants in ${file}"
 
-              console.log(`Created issue for ${mutants.length} surviving mutants in ${file}`);
-            }
+            body=""
+            body+="## Surviving Mutants"$'\n\n'
+            body+="Mutation testing found **${count} surviving mutant(s)** in "'`'"${file}"'`'"."$'\n'
+            body+="Detected during release PR #${PR_NUMBER}."$'\n\n'
+            body+="### Mutants"$'\n\n'
+            body+="${mutant_list}"$'\n\n'
+            body+="### What This Means"$'\n\n'
+            body+="Each surviving mutant represents a code change that no test caught."$'\n'
+            body+="This indicates a gap in test coverage that could allow bugs to ship undetected."$'\n\n'
+            body+="### How to Fix"$'\n\n'
+            body+="1. For each mutant, write a test that fails when the mutation is applied"$'\n'
+            body+="2. Run "'`'"cargo mutants --file ${file}"'`'" locally to verify the fix"$'\n'
+            body+="3. All mutants must be killed before the next release"$'\n\n'
+            body+="### Context"$'\n\n'
+            body+="- Release PR: #${PR_NUMBER}"$'\n'
+            body+="- Full mutation report: see workflow artifacts"$'\n'
+
+            payload=$(jq -n \
+              --arg title "$title" \
+              --arg body "$body" \
+              '{title: $title, body: $body, labels: ["P0-critical", "bug"]}')
+
+            curl -fsSL -X POST \
+              -H "Authorization: token ${GITHUB_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              "${api}" \
+              -d "$payload"
+
+            echo "Created issue for ${count} surviving mutants in ${file}"
+          done
 
       - name: Fail if mutants survived
         if: steps.mutants.outputs.has_survivors == 'true'
@@ -268,7 +251,7 @@ jobs:
     name: Security Audit
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: docker
     steps:
       - uses: actions/checkout@v6
 
@@ -287,7 +270,7 @@ jobs:
     name: CI Gate
     if: always()
     needs: [changes, test, format, clippy, mutation, security-audit]
-    runs-on: ubuntu-latest
+    runs-on: docker
     steps:
       - name: Check job results
         run: |

@@ -20,8 +20,9 @@ pub(crate) static POSTGRES_CONTAINER: OnceLock<()> = OnceLock::new();
 /// - In CI: Postgres is provided as a service container, already running
 /// - Locally: Starts postgres via docker-compose if not already running
 pub(crate) fn ensure_postgres_running() {
-    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
-    let connection_string = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
+    let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
+    let connection_string = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
 
     // First, check if postgres is already accessible (e.g., CI service container)
     if can_connect_to_postgres(&connection_string) {
@@ -104,8 +105,9 @@ fn can_connect_to_postgres(connection_string: &str) -> bool {
 
 /// Get the connection string for the Postgres container.
 pub(crate) fn connection_string() -> String {
-    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
-    format!("postgres://postgres:postgres@localhost:{}/postgres", port)
+    let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
+    format!("postgres://postgres:postgres@{}:{}/postgres", host, port)
 }
 
 /// Create a PostgresEventStore connected to the shared test container.

@@ -92,18 +92,23 @@ Use `/core:develop` skill. Follow outside-in TDD:
 
 ## Work Tracking Across Sessions
 
-### GitHub Issues
+### Forgejo Issues
 
-All work items, feature requests, and bug reports are tracked as GitHub Issues. At the start of each development session, check open issues to understand current priorities.
+All work items, feature requests, and bug reports are tracked as Forgejo
+Issues at `git.johnwilger.com/jwilger/eventcore`. At the start of each
+development session, check open issues to understand current priorities.
 
-Use the GitHub MCP tools (`mcp__plugin_github_github__list_issues`, `mcp__plugin_github_github__issue_read`) to read issues — not the `gh` CLI.
+Use the `tea` CLI or direct `curl` calls to the Forgejo REST API
+(`/api/v1/repos/jwilger/eventcore/issues`) to read and manage issues. There
+is no Forgejo MCP plugin; the previously documented
+`mcp__plugin_github_github__*` tools no longer apply.
 
 ### Session Continuity
 
 At the start of each session:
 
 1. Read MEMORY.md for cross-session context about in-progress work
-2. Check GitHub Issues for current priorities and assignments
+2. Check Forgejo Issues for current priorities and assignments
 3. Scan blueprint statuses for partially completed work (if blueprints exist)
 4. Resume where the previous session left off
 

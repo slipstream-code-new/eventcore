@@ -9,7 +9,7 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:  # Allow manual triggering
+  workflow_dispatch: # Allow manual triggering
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ permissions:
 jobs:
   publish:
     name: Publish Workspace Crates
-    runs-on: ubuntu-latest
+    runs-on: docker
     # Run if: (1) release PR merge (commit starts with "chore: release"), OR (2) manually triggered
     if: "github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'chore: release')"
 
@@ -43,13 +43,13 @@ jobs:
       # Note: Quality gates (tests, clippy, fmt) already verified by CI workflows
       # No need to re-run here - branch protection ensures they passed before merge
 
-      # Publish to crates.io and create GitHub release
+      # Publish to crates.io and create Forgejo release
       # release-plz handles:
       # - Publishing in dependency order (per release-plz.toml)
       # - Retry logic with exponential backoff (3 attempts)
-      # - GitHub release creation with changelog
+      # - Forgejo release creation with changelog
       # - Git tag creation
-      - name: Publish to crates.io and create GitHub release
+      - name: Publish to crates.io and create Forgejo release
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -62,5 +62,5 @@ jobs:
 
           release-plz release \
             --git-token "$GITHUB_TOKEN" \
-            --backend github \
+            --backend gitea \
             --config ./release-plz.toml

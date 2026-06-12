@@ -66,6 +66,9 @@ postgres-data/
 .env
 .env.local
 
+# Per-developer MCP config (contains Forgejo PAT)
+.mcp.json
+
 # Nix result symlinks
 result
 result-*
