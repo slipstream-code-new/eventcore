@@ -114,14 +114,17 @@ let metadata = EventMetadata::new()
 
 EventCore defines a trait that storage adapters implement:
 
-```rust
+```rust,ignore
 pub trait EventStore {
-    /// Read all events from a single stream, returning an EventStreamReader
-    /// that provides the events and the current stream version.
+    /// Read events from a single stream as a lazy async `Stream`.
+    ///
+    /// The returned `EventStream<E>` yields events on demand rather than
+    /// collecting the whole history up front. When you need the events as a
+    /// `Vec`, use the `collect_events` helper.
     fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> impl Future<Output = Result<EventStreamReader<E>, EventStoreError>> + Send;
+    ) -> impl Future<Output = Result<EventStream<E>, EventStoreError>> + Send;
 
     /// Atomically append events to one or more streams with optimistic
     /// concurrency control via expected stream versions.
@@ -131,6 +134,22 @@ pub trait EventStore {
     ) -> impl Future<Output = Result<EventStreamSlice, EventStoreError>> + Send;
 }
 ```
+
+`read_stream` returns a lazy [`EventStream`] — an async `Stream` of events.
+To materialize the whole history into a `Vec` (the common case when
+reconstructing state), pass it to the `collect_events` free function:
+
+```rust,ignore
+use eventcore::{collect_events, EventStream};
+
+let stream: EventStream<MyEvent> = store.read_stream(stream_id).await?;
+let events: Vec<MyEvent> = collect_events(stream).await?;
+```
+
+> **Note:** The earlier `EventStreamReader` type (which eagerly collected
+> events and exposed `len()`/`first()`/`into_iter()`) was removed in
+> [ADR-0049](../../adr/ADR-0049-streaming-reads.md). Use `EventStream` plus
+> `collect_events` instead.
 
 ## Stream Versioning
 

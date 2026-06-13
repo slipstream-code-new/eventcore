@@ -153,27 +153,22 @@ impl ApiError {
 
     fn from_command_error(error: CommandError) -> Self {
         match error {
-            CommandError::ValidationFailed(msg) => Self {
+            CommandError::ValidationError(msg) => Self {
                 status: StatusCode::BAD_REQUEST,
                 message: msg,
                 details: None,
             },
-            CommandError::BusinessRuleViolation(msg) => Self {
+            CommandError::BusinessRuleViolation(err) => Self {
                 status: StatusCode::UNPROCESSABLE_ENTITY,
-                message: msg,
+                message: err.to_string(),
                 details: None,
             },
-            CommandError::StreamNotFound(_) => Self {
-                status: StatusCode::NOT_FOUND,
-                message: "Resource not found".to_string(),
-                details: None,
-            },
-            CommandError::ConcurrencyConflict(_) => Self {
+            CommandError::ConcurrencyError(_) => Self {
                 status: StatusCode::CONFLICT,
                 message: "Resource was modified by another request".to_string(),
                 details: None,
             },
-            _ => Self {
+            CommandError::EventStoreError(_) => Self {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
                 message: "An internal error occurred".to_string(),
                 details: None,

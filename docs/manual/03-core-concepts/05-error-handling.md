@@ -21,28 +21,28 @@ The main error type for command execution:
 ```rust
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
-    #[error("Validation failed: {0}")]
-    ValidationFailed(String),
+    /// A business rule was violated. Wraps the command's own typed error;
+    /// this is what `require!` and your typed error enums convert into.
+    #[error(transparent)]
+    BusinessRuleViolation(Box<dyn std::error::Error + Send + Sync>),
 
-    #[error("Business rule violation: {0}")]
-    BusinessRuleViolation(String),
+    /// Optimistic concurrency conflicts persisted after the retry policy was
+    /// exhausted. The `u32` is the number of retry attempts made.
+    #[error("concurrency conflict after {0} retry attempts")]
+    ConcurrencyError(u32),
 
-    #[error("Stream not found: {0}")]
-    StreamNotFound(StreamId),
+    /// The underlying event store failed.
+    #[error("event store error: {0}")]
+    EventStoreError(EventStoreError),
 
-    #[error("Concurrency conflict on streams: {0:?}")]
-    ConcurrencyConflict(Vec<StreamId>),
-
-    #[error("Event store error: {0}")]
-    EventStore(#[from] EventStoreError),
-
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
-
-    #[error("Maximum retries exceeded: {0}")]
-    MaxRetriesExceeded(String),
+    /// A validation error surfaced during execution.
+    #[error("validation error: {0}")]
+    ValidationError(String),
 }
 ```
+
+> See [Chapter 8.3: Error Reference](../08-reference/03-error-reference.md) for
+> a per-variant breakdown of causes and resolutions.
 
 ### Event Store Errors
 
@@ -457,7 +457,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(CommandError::ValidationFailed(msg)) if msg.contains("Insufficient balance")
+            Err(CommandError::BusinessRuleViolation(err)) if err.to_string().contains("Insufficient balance")
         ));
     }
 
