@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-fs-v0.8.1...eventcore-fs-v0.8.2) - 2026-06-13
+
+### Features
+
+- *(eventcore-fs)* local-ingestion cursor for projections ([#398](https://git.johnwilger.com/Slipstream/eventcore/pulls/398))
+
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-fs-v0.8.0...eventcore-fs-v0.8.1) - 2026-06-13
 
 ### Features
