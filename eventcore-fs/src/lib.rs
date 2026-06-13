@@ -218,9 +218,16 @@ impl EventStore for FileEventStore {
                         event_data,
                         ..
                     } = entry;
-                    (stream_id.as_ref().to_string(), event_type, event_data)
+                    // event_data is pre-serialized JSON. Parse it back into a
+                    // Value so the on-disk envelope (and its integrity anchor)
+                    // stays byte-identical to the historical representation.
+                    let event_data = serde_json::from_str::<serde_json::Value>(event_data.get())
+                        .map_err(|_| EventStoreError::StoreFailure {
+                            operation: Operation::AppendEvents,
+                        })?;
+                    Ok((stream_id.as_ref().to_string(), event_type, event_data))
                 })
-                .collect();
+                .collect::<Result<Vec<_>, EventStoreError>>()?;
             let (envelopes, new_events) = build_envelopes(&index, items);
 
             let header = TransactionHeader {

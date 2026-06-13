@@ -6,6 +6,7 @@ use eventcore_types::{
     StreamVersion, StreamWrites,
 };
 use nutype::nutype;
+use serde_json::value::RawValue;
 use serde_json::{Value, json};
 use sqlx::types::Json;
 use sqlx::{Pool, Postgres, QueryBuilder, Row, postgres::PgPoolOptions, query};
@@ -205,7 +206,7 @@ impl EventStore for PostgresEventStore {
         // Drop the type-erased event payload (only the in-memory store needs
         // it) and keep just the Send + Sync fields used for SQL binding, so the
         // borrows held by the insert loop stay Send across the awaits.
-        let rows: Vec<(StreamId, &'static str, Value)> = entries
+        let rows: Vec<(StreamId, &'static str, Box<RawValue>)> = entries
             .into_iter()
             .map(|entry| (entry.stream_id, entry.event_type, entry.event_data))
             .collect();

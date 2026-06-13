@@ -437,12 +437,10 @@ impl EventStore for SqliteEventStore {
                 *version_counter += 1;
                 let version = *version_counter;
 
-                let event_json = serde_json::to_string(event_data).map_err(|e| {
-                    error!(error = %e, "[sqlite.append_events] serialization failed");
-                    EventStoreError::StoreFailure {
-                        operation: Operation::AppendEvents,
-                    }
-                })?;
+                // event_data is already serialized JSON (serialized once at
+                // append time); bind its raw string directly instead of
+                // re-serializing a serde_json::Value.
+                let event_json = event_data.get().to_owned();
 
                 bound_values.push(rusqlite::types::Value::Text(event_id));
                 bound_values.push(rusqlite::types::Value::Text(stream_id.as_ref().to_string()));
