@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-macros-v0.9.0...eventcore-macros-v0.10.0) - 2026-06-13
+
+### Features
+
+- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-macros-v0.8.0...eventcore-macros-v0.8.1) - 2026-06-13
 
 ### Deps

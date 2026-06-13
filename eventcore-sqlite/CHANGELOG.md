@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v0.9.0...eventcore-sqlite-v0.10.0) - 2026-06-13
+
+### Features
+
+- *(eventcore-types)* glob pattern matching for subscriptions ([#246](https://git.johnwilger.com/Slipstream/eventcore/pulls/246)) ([#410](https://git.johnwilger.com/Slipstream/eventcore/pulls/410))
+- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+
+### Performance
+
+- *(eventcore-sqlite)* batch INSERT in append_events ([#362](https://git.johnwilger.com/Slipstream/eventcore/pulls/362)) ([#404](https://git.johnwilger.com/Slipstream/eventcore/pulls/404))
+- serialize events once in the append path ([#361](https://git.johnwilger.com/Slipstream/eventcore/pulls/361)) ([#408](https://git.johnwilger.com/Slipstream/eventcore/pulls/408))
+
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v0.8.0...eventcore-sqlite-v0.8.1) - 2026-06-13
 
 ### Miscellaneous Tasks
