@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "chrono",
  "eventcore-macros",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-bench"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "criterion",
  "eventcore",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-demo"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-examples"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "eventcore",
  "eventcore-macros",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-fs"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "chrono",
  "eventcore-testing",
@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-macros"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-memory"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "eventcore-testing",
  "eventcore-types",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-postgres"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "eventcore-testing",
  "eventcore-types",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-sqlite"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "eventcore-testing",
  "eventcore-types",
@@ -746,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-stress"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "clap",
  "eventcore",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-testing"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-types"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "glob",
  "nutype",
