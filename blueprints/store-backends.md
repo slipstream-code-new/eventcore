@@ -1,24 +1,26 @@
 ---
 name: store-backends
-summary: Pluggable EventStore implementations for PostgreSQL, SQLite, and in-memory testing.
+summary: Pluggable EventStore implementations for PostgreSQL, SQLite, in-memory testing, and git-mergeable files.
 ---
 
 # Store Backends
 
-Three interchangeable implementations of the event sourcing traits. Domain code is backend-agnostic; the choice of backend is a deployment decision.
+Four interchangeable implementations of the event sourcing traits. Domain code is backend-agnostic; the choice of backend is a deployment decision.
 
 ## Overview
 
-Each backend implements `EventStore`, `EventReader`, `CheckpointStore`, and `ProjectorCoordinator`. The in-memory backend is for testing, SQLite for embedded/single-instance, and PostgreSQL for production distributed deployments.
+Each backend implements `EventStore`, `EventReader`, `CheckpointStore`, and `ProjectorCoordinator`. The in-memory backend is for testing, SQLite for embedded/single-instance, PostgreSQL for production distributed deployments, and the file backend (`eventcore-fs`) for local-first / git-backed tools that need offline collaboration via `git merge`.
 
 ## Trait Implementation Matrix
 
-| Trait                  | PostgreSQL                      | SQLite                           | In-Memory             |
-| ---------------------- | ------------------------------- | -------------------------------- | --------------------- |
-| `EventStore`           | ACID transactions               | WAL mode                         | Mutex-guarded HashMap |
-| `EventReader`          | SQL queries with UUID7 ordering | SQL queries                      | Global log scan       |
-| `CheckpointStore`      | Dedicated table                 | Dedicated table                  | HashMap               |
-| `ProjectorCoordinator` | Advisory locks (distributed)    | In-memory locks (single-process) | In-memory locks       |
+| Trait                  | PostgreSQL                      | SQLite                           | In-Memory             | File (`eventcore-fs`)                        |
+| ---------------------- | ------------------------------- | -------------------------------- | --------------------- | -------------------------------------------- |
+| `EventStore`           | ACID transactions               | WAL mode                         | Mutex-guarded HashMap | One immutable JSONL file per transaction     |
+| `EventReader`          | SQL queries with UUID7 ordering | SQL queries                      | Global log scan       | Read-time linearization of a transaction DAG |
+| `CheckpointStore`      | Dedicated table                 | Dedicated table                  | HashMap               | Per-subscription JSON files (gitignored)     |
+| `ProjectorCoordinator` | Advisory locks (distributed)    | In-memory locks (single-process) | In-memory locks       | OS advisory file locks (`fs4`)               |
+
+The file backend additionally exposes a **merge mode** — fork detection and domain-owned reconciliation of histories combined via `git merge` — as file-store-specific API _outside_ the shared traits (ADR-0045). See the [fs-merge-mode](fs-merge-mode.md) blueprint.
 
 ## PostgreSQL Backend
 
@@ -71,6 +73,29 @@ Each backend implements `EventStore`, `EventReader`, `CheckpointStore`, and `Pro
 
 **Files:** `eventcore-memory/src/lib.rs`
 
+## File Backend (`eventcore-fs`)
+
+**Storage:** One immutable JSONL file per `append_events` transaction under
+`events/`, named by a transaction UUID7. Line 1 is a header (transaction id,
+replica id, parent transaction ids, `created_at`, per-stream base versions);
+lines 2..N are one event envelope each. Only `events/` is committed to git; the
+in-memory index, checkpoints, locks, replica id, and tmp staging are gitignored.
+
+**Key features:**
+
+- All-or-nothing atomicity via tmp-write → fsync → atomic `rename` → dir-fsync;
+  one transaction file is the atomic multi-stream unit (ADR-0038)
+- `StreamVersion` and global order are computed at read time by linearizing a
+  transaction DAG, not read from a stored column (ADR-0039); single-writer mode
+  is the degenerate linear-chain case that passes the contract suite unchanged
+- In-process append mutex + cross-process `.lock` + per-subscription OS advisory
+  locks via `fs4` (ADR-0040)
+- **Merge mode** (off-trait, ADR-0045): `detect_forks` / `reconcile` / `status`
+  reconcile histories combined via `git merge`, with deterministic linearization
+  and domain-owned resolution (ADR-0041 through ADR-0046)
+
+**Files:** `eventcore-fs/src/lib.rs`
+
 ## Common Patterns
 
 All backends share:
@@ -105,15 +130,18 @@ eventcore = { version = "0.6", features = ["sqlite"] }
 
 ## Files
 
-| File                            | Description                          |
-| ------------------------------- | ------------------------------------ |
-| `eventcore-postgres/src/lib.rs` | PostgresEventStore + all trait impls |
-| `eventcore-sqlite/src/lib.rs`   | SqliteEventStore + all trait impls   |
-| `eventcore-memory/src/lib.rs`   | InMemoryEventStore + all trait impls |
+| File                            | Description                                   |
+| ------------------------------- | --------------------------------------------- |
+| `eventcore-postgres/src/lib.rs` | PostgresEventStore + all trait impls          |
+| `eventcore-sqlite/src/lib.rs`   | SqliteEventStore + all trait impls            |
+| `eventcore-memory/src/lib.rs`   | InMemoryEventStore + all trait impls          |
+| `eventcore-fs/src/lib.rs`       | FileEventStore + all trait impls + merge mode |
 
 ## Related Systems
 
 - [event-sourcing](event-sourcing.md) — Traits these backends implement
 - [testing-infrastructure](testing-infrastructure.md) — Contract tests that verify backend correctness
+- [fs-merge-mode](fs-merge-mode.md) — Git-mergeable reconciliation layered on the file backend
 - ADR-011: In-memory store crate location
 - ADR-022: Crate reorganization for feature flags
+- ADR-0038 through ADR-0046: File backend format, linearization, locking, and merge mode

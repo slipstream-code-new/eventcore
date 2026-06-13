@@ -3,6 +3,7 @@ members = [
     "eventcore",
     "eventcore-bench",
     "eventcore-examples",
+    "eventcore-fs",
     "eventcore-macros",
     "eventcore-memory",
     "eventcore-postgres",
