@@ -48,6 +48,7 @@ pub(crate) struct Roots {
     pub(crate) events: PathBuf,
     pub(crate) tmp: PathBuf,
     pub(crate) eventcore: PathBuf,
+    pub(crate) index: PathBuf,
 }
 
 impl Roots {
@@ -57,11 +58,12 @@ impl Roots {
             events: root.join("events"),
             tmp: root.join("tmp"),
             eventcore: root.join(".eventcore"),
+            index: root.join("index"),
         }
     }
 
     pub(crate) fn create_dirs(&self) -> Result<(), FsEventStoreError> {
-        for dir in [&self.events, &self.tmp, &self.eventcore] {
+        for dir in [&self.events, &self.tmp, &self.eventcore, &self.index] {
             fs::create_dir_all(dir).map_err(|source| FsEventStoreError::InitFailed {
                 path: dir.clone(),
                 source,
@@ -76,6 +78,10 @@ impl Roots {
 
     pub(crate) fn replica_id_path(&self) -> PathBuf {
         self.eventcore.join("replica_id")
+    }
+
+    pub(crate) fn ingestion_log_path(&self) -> PathBuf {
+        self.index.join("ingestion.log")
     }
 
     pub(crate) fn event_path(&self, transaction_id: Uuid) -> PathBuf {

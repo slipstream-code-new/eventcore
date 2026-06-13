@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::config::Roots;
 use crate::error::FsEventStoreError;
 use crate::format::{EventEnvelope, TransactionHeader, parse_transaction};
+use crate::ingestion::{IngestionLog, position_from_seq};
 
 /// An event as held in the in-memory linearized index.
 #[derive(Debug, Clone)]
@@ -23,17 +24,37 @@ pub(crate) struct IndexedEvent {
 #[derive(Debug, Default)]
 pub(crate) struct Index {
     pub(crate) headers: HashMap<Uuid, TransactionHeader>,
-    /// Events in canonical (linearized) global order.
-    pub(crate) global: Vec<IndexedEvent>,
+    /// Events in this replica's local-ingestion order, paired with the
+    /// position UUID derived from each event's local sequence (ADR-0043(c)).
+    /// This is the order the `EventReader` cursor advances through, so it is
+    /// sorted ascending by position and a merge-introduced event always sorts
+    /// after everything previously ingested.
+    pub(crate) by_ingestion: Vec<(Uuid, IndexedEvent)>,
     /// Per-stream events in canonical order.
     pub(crate) streams: HashMap<String, Vec<IndexedEvent>>,
     /// Transactions with no children — the current head(s).
     pub(crate) tips: Vec<Uuid>,
+    /// This replica's local-ingestion order (sequence-per-event), held so the
+    /// append path can hand out the next position.
+    pub(crate) log: IngestionLog,
 }
 
 impl Index {
     pub(crate) fn stream_head(&self, stream_id: &str) -> usize {
         self.streams.get(stream_id).map(Vec::len).unwrap_or(0)
+    }
+
+    /// Record a newly-appended event in local-ingestion order: allocate the
+    /// next local sequence, append it to the ingestion view at the largest
+    /// position (so the view stays sorted), and return both the position UUID
+    /// to use as the cursor key and the `(event_id, seq)` entry the caller must
+    /// persist to the ingestion log.
+    pub(crate) fn ingest_appended(&mut self, indexed: IndexedEvent) -> (Uuid, (Uuid, u64)) {
+        let event_id = indexed.event_id;
+        let seq = self.log.allocate(event_id);
+        let position = position_from_seq(seq);
+        self.by_ingestion.push((position, indexed));
+        (position, (event_id, seq))
     }
 }
 
@@ -104,7 +125,10 @@ pub(crate) fn compute_tips(headers: &HashMap<Uuid, TransactionHeader>) -> Vec<Uu
     tips
 }
 
-fn build_index(transactions: Vec<(TransactionHeader, Vec<EventEnvelope>)>) -> Index {
+fn build_index(
+    transactions: Vec<(TransactionHeader, Vec<EventEnvelope>)>,
+    mut log: IngestionLog,
+) -> (Index, Vec<(Uuid, u64)>) {
     let mut headers: HashMap<Uuid, TransactionHeader> = HashMap::new();
     let mut events_by_txn: HashMap<Uuid, Vec<EventEnvelope>> = HashMap::new();
     for (header, events) in transactions {
@@ -116,8 +140,15 @@ fn build_index(transactions: Vec<(TransactionHeader, Vec<EventEnvelope>)>) -> In
     let order = linearize(&headers);
     let tips = compute_tips(&headers);
 
-    let mut global: Vec<IndexedEvent> = Vec::new();
+    // Walk events in canonical order to build the per-stream canonical view and
+    // to assign a local-ingestion sequence to every event not already in the
+    // log. Events already known keep their persisted sequence (a projection
+    // checkpoint stays valid across reopen); events new to this replica — newly
+    // appended or arrived via a `git merge` — get fresh, larger sequences so a
+    // cursor advances forward to cover them (ADR-0043(c)).
     let mut streams: HashMap<String, Vec<IndexedEvent>> = HashMap::new();
+    let mut positioned: Vec<(Uuid, IndexedEvent)> = Vec::new();
+    let mut new_entries: Vec<(Uuid, u64)> = Vec::new();
     for transaction_id in order {
         let events = events_by_txn.remove(&transaction_id).unwrap_or_default();
         for envelope in events {
@@ -131,16 +162,31 @@ fn build_index(transactions: Vec<(TransactionHeader, Vec<EventEnvelope>)>) -> In
                 .entry(indexed.stream_id.clone())
                 .or_default()
                 .push(indexed.clone());
-            global.push(indexed);
+            let seq = match log.seq_of(&indexed.event_id) {
+                Some(seq) => seq,
+                None => {
+                    let seq = log.allocate(indexed.event_id);
+                    new_entries.push((indexed.event_id, seq));
+                    seq
+                }
+            };
+            positioned.push((position_from_seq(seq), indexed));
         }
     }
+    // Local-ingestion order is the assigned sequence; sort so the cursor walks
+    // events in the order this replica became aware of them.
+    positioned.sort_by_key(|(position, _)| *position);
 
-    Index {
-        headers,
-        global,
-        streams,
-        tips,
-    }
+    (
+        Index {
+            headers,
+            by_ingestion: positioned,
+            streams,
+            tips,
+            log,
+        },
+        new_entries,
+    )
 }
 
 /// Build event envelopes and their index entries for a transaction, assigning
@@ -195,7 +241,10 @@ pub(crate) fn scan_index(roots: &Roots) -> Result<Index, FsEventStoreError> {
         }
         transactions.push(parse_transaction(&path)?);
     }
-    Ok(build_index(transactions))
+    let log = IngestionLog::load(roots)?;
+    let (index, new_entries) = build_index(transactions, log);
+    index.log.persist(roots, &new_entries)?;
+    Ok(index)
 }
 
 #[cfg(test)]
