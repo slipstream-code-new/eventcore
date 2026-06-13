@@ -20,54 +20,64 @@ jobs:
     runs-on: ubuntu-24.04
     # Skip if this is a release PR merge (to avoid infinite loops)
     if: "!startsWith(github.event.head_commit.message, 'chore: release')"
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GIT_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+      RELEASE_SIGNING_NAME: ${{ vars.RELEASE_SIGNING_NAME }}
+      RELEASE_SIGNING_EMAIL: ${{ vars.RELEASE_SIGNING_EMAIL }}
 
     steps:
+      - name: Skip when release PR secrets are not available
+        if: ${{ env.GIT_TOKEN == '' || env.RELEASE_SIGNING_KEY == '' }}
+        run: |
+          echo "release PR skipped: configure RELEASE_PLZ_TOKEN and RELEASE_SIGNING_KEY to create signed release PRs"
+
       - name: Checkout repository
+        if: ${{ env.GIT_TOKEN != '' && env.RELEASE_SIGNING_KEY != '' }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for changelog generation
-          # Use PAT to allow release PR to trigger CI workflows
-          # The auto-provided GITHUB_TOKEN does not trigger downstream runs
+          # Use PAT to allow release PR to trigger CI workflows; the
+          # auto-provided GITHUB_TOKEN does not trigger downstream runs
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          persist-credentials: false
 
       - name: Install Rust toolchain
+        if: ${{ env.GIT_TOKEN != '' && env.RELEASE_SIGNING_KEY != '' }}
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache dependencies
+        if: ${{ env.GIT_TOKEN != '' && env.RELEASE_SIGNING_KEY != '' }}
         uses: Swatinem/rust-cache@v2
 
       - name: Install release-plz
+        if: ${{ env.GIT_TOKEN != '' && env.RELEASE_SIGNING_KEY != '' }}
         uses: taiki-e/install-action@v2
         with:
           tool: release-plz
 
       - name: Install cargo-semver-checks
+        if: ${{ env.GIT_TOKEN != '' && env.RELEASE_SIGNING_KEY != '' }}
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-semver-checks
 
-      - name: Configure git identity
-        env:
-          RELEASE_BOT_NAME: ${{ vars.RELEASE_BOT_NAME }}
-          RELEASE_BOT_EMAIL: ${{ vars.RELEASE_BOT_EMAIL }}
-        run: |
-          git config --global user.name "${RELEASE_BOT_NAME:-release-plz-bot}"
-          git config --global user.email "${RELEASE_BOT_EMAIL:-release-plz-bot@noreply.johnwilger.com}"
-
       - name: Create/update release PR
-        env:
-          # Use PAT instead of GITHUB_TOKEN to trigger CI on release PR
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          GIT_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        if: ${{ env.GIT_TOKEN != '' && env.RELEASE_SIGNING_KEY != '' }}
         run: |
-          # Credentials for release-plz's temp-clone git pushes (checkout@v6
-          # scopes its own credentials to the workspace gitdir)
+          # The main branch rejects unverified commits, so the release PR
+          # commit must be signed. release-plz's own commit is unsigned, so
+          # we run `release-plz update` (file changes only) and create the
+          # signed commit ourselves (see create-release-plz-release-pr.sh),
+          # matching the pattern used by the other Slipstream repos.
+          #
+          # Lockstep versioning is enforced via workspace version
+          # inheritance (see workspace Cargo.toml and ADR-025).
           . ./.forgejo/scripts/configure-release-plz-git-auth.sh
-
-          # release-plz creates/updates PR with version bumps and changelog
-          # Lockstep versioning enforced via workspace version inheritance
-          # (see workspace Cargo.toml and ADR-025)
-          release-plz release-pr \
-            --git-token "$GITHUB_TOKEN" \
-            --forge gitea \
-            --config ./release-plz.toml
+          . ./.forgejo/scripts/configure-release-plz-git-signing.sh
+          git config --global user.name "${RELEASE_SIGNING_NAME:-release-plz-bot}"
+          git config --global user.email "${RELEASE_SIGNING_EMAIL:-release-plz-bot@noreply.git.johnwilger.com}"
+          sh ./.forgejo/scripts/create-release-plz-release-pr.sh
