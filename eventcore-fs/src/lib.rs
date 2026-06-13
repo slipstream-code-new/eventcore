@@ -30,6 +30,7 @@ mod coordination;
 mod error;
 mod format;
 mod index;
+mod ingestion;
 mod merge;
 
 use std::collections::BTreeMap;
@@ -280,15 +281,23 @@ impl EventStore for FileEventStore {
                         operation: Operation::AppendEvents,
                     })?;
             let _ = index.headers.insert(transaction_id, header);
+            let mut new_entries: Vec<(Uuid, u64)> = Vec::with_capacity(new_events.len());
             for indexed in new_events {
                 index
                     .streams
                     .entry(indexed.stream_id.clone())
                     .or_default()
                     .push(indexed.clone());
-                index.global.push(indexed);
+                let (_position, entry) = index.ingest_appended(indexed);
+                new_entries.push(entry);
             }
             index.tips = vec![transaction_id];
+            index
+                .log
+                .persist(&self.shared.roots, &new_entries)
+                .map_err(|_| EventStoreError::StoreFailure {
+                    operation: Operation::AppendEvents,
+                })?;
         }
 
         Ok(EventStreamSlice)
@@ -316,26 +325,31 @@ impl EventReader for FileEventStore {
         let prefix = filter.stream_prefix();
         let explicit_type = filter.event_type();
 
+        // Pagination walks local-ingestion order (ADR-0043(c)): events are
+        // delivered in the order this replica became aware of them, and the
+        // cursor is the local-ingestion position — not the canonical event id.
+        // A merge-introduced event sorts after everything previously ingested,
+        // so a live projection never rewinds and never skips it.
         let events: Vec<(E, StreamPosition)> = index
-            .global
+            .by_ingestion
             .iter()
-            .filter(|indexed| match after {
+            .filter(|(position, _)| match after {
                 None => true,
-                Some(after_id) => indexed.event_id > after_id,
+                Some(after_position) => *position > after_position,
             })
-            .filter(|indexed| match prefix {
+            .filter(|(_, indexed)| match prefix {
                 None => true,
                 Some(prefix) => indexed.stream_id.starts_with(prefix.as_ref()),
             })
-            .filter(|indexed| {
+            .filter(|(_, indexed)| {
                 let wanted = explicit_type.unwrap_or_else(|| E::event_type_name());
                 indexed.event_type == wanted
             })
             .take(limit)
-            .filter_map(|indexed| {
+            .filter_map(|(position, indexed)| {
                 serde_json::from_value::<E>(indexed.event_data.clone())
                     .ok()
-                    .map(|event| (event, StreamPosition::new(indexed.event_id)))
+                    .map(|event| (event, StreamPosition::new(*position)))
             })
             .collect();
 
@@ -539,15 +553,24 @@ impl FileEventStore {
                 detail: "index lock poisoned".to_string(),
             })?;
         let _ = index.headers.insert(transaction_id, header);
+        let mut new_entries: Vec<(Uuid, u64)> = Vec::with_capacity(new_events.len());
         for indexed in new_events {
             index
                 .streams
                 .entry(indexed.stream_id.clone())
                 .or_default()
                 .push(indexed.clone());
-            index.global.push(indexed);
+            let (_position, entry) = index.ingest_appended(indexed);
+            new_entries.push(entry);
         }
         index.tips = compute_tips(&index.headers);
+        index
+            .log
+            .persist(&self.shared.roots, &new_entries)
+            .map_err(|error| FsEventStoreError::Corrupted {
+                path: self.shared.roots.root.clone(),
+                detail: format!("failed to persist ingestion log: {error}"),
+            })?;
         Ok(())
     }
 }

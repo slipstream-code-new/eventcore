@@ -10,10 +10,7 @@ use std::fs;
 use std::path::Path;
 
 use eventcore_fs::{FileEventStore, ResolutionOutcome};
-use eventcore_types::{
-    BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, StreamId, StreamVersion,
-    StreamWrites,
-};
+use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
@@ -63,16 +60,22 @@ fn union_events(src: &Path, dst: &Path) {
     }
 }
 
-async fn canonical_order(root: &Path) -> Vec<(String, String)> {
-    let store = FileEventStore::open(root).expect("open");
-    let events = store
-        .read_events::<Note>(EventFilter::all(), EventPage::first(BatchSize::new(1000)))
+/// The canonical per-stream order of a stream's events. Convergence is a
+/// property of canonical linearized state (ADR-0039), which the public API
+/// exposes through `read_stream` — not through the `EventReader` cursor, which
+/// now tracks per-replica local-ingestion order (ADR-0043(c)) and therefore
+/// legitimately differs between clones.
+async fn canonical_texts(store: &FileEventStore, stream: &StreamId) -> Vec<String> {
+    let reader = store
+        .read_stream::<Note>(stream.clone())
         .await
-        .expect("read_events");
-    events
-        .into_iter()
-        .map(|(note, _position)| (note.stream_id.as_ref().to_string(), note.text))
-        .collect()
+        .expect("read_stream");
+    reader.iter().map(|note| note.text.clone()).collect()
+}
+
+async fn canonical_order(root: &Path, stream: &StreamId) -> Vec<String> {
+    let store = FileEventStore::open(root).expect("open");
+    canonical_texts(&store, stream).await
 }
 
 #[tokio::test]
@@ -101,15 +104,15 @@ async fn two_clones_converge_after_union_merge() {
     union_events(dir_a.path(), dir_b.path());
     union_events(dir_b.path(), dir_a.path());
 
-    let order_a = canonical_order(dir_a.path()).await;
-    let order_b = canonical_order(dir_b.path()).await;
+    let order_a = canonical_order(dir_a.path(), &account).await;
+    let order_b = canonical_order(dir_b.path(), &account).await;
 
     assert_eq!(
         order_a, order_b,
         "clones holding the same file set must converge to identical canonical order"
     );
     assert_eq!(order_a.len(), 3, "ancestor plus both divergent events");
-    assert_eq!(order_a[0].1, "opened", "the causal ancestor sorts first");
+    assert_eq!(order_a[0], "opened", "the causal ancestor sorts first");
 }
 
 #[tokio::test]
@@ -141,8 +144,8 @@ async fn convergence_is_independent_of_merge_direction() {
     let dir_c = TempDir::new().expect("temp c");
     union_events(dir_b.path(), dir_c.path());
 
-    let order_a = canonical_order(dir_a.path()).await;
-    let order_c = canonical_order(dir_c.path()).await;
+    let order_a = canonical_order(dir_a.path(), &stream).await;
+    let order_c = canonical_order(dir_c.path(), &stream).await;
     assert_eq!(order_a, order_c, "canonical order is content-determined");
 }
 
@@ -196,16 +199,6 @@ async fn linear_history_has_no_forks() {
         "a linear single-writer history never forks"
     );
     assert!(store.status().expect("status").is_clean());
-}
-
-async fn read_texts(store: &FileEventStore) -> Vec<String> {
-    store
-        .read_events::<Note>(EventFilter::all(), EventPage::first(BatchSize::new(1000)))
-        .await
-        .expect("read_events")
-        .into_iter()
-        .map(|(note, _position)| note.text)
-        .collect()
 }
 
 #[tokio::test]
@@ -285,8 +278,8 @@ async fn reconcile_collapses_fork_and_converges() {
         "B also sees the fork resolved"
     );
     assert_eq!(
-        read_texts(&store).await,
-        read_texts(&b).await,
+        canonical_texts(&store, &account).await,
+        canonical_texts(&b, &account).await,
         "both clones converge after reconcile"
     );
 }
@@ -450,8 +443,8 @@ async fn merge_of_merges_converges_and_terminates() {
     union_events(dir_a.path(), dir_b.path());
     let b = FileEventStore::open(dir_b.path()).expect("reopen b");
     assert_eq!(
-        read_texts(&store).await,
-        read_texts(&b).await,
+        canonical_texts(&store, &account).await,
+        canonical_texts(&b, &account).await,
         "merge-of-merges converges across clones"
     );
 }
