@@ -181,9 +181,49 @@ fn fork_is_resolved(heads: &[Uuid], headers: &HashMap<Uuid, TransactionHeader>) 
     })
 }
 
+/// Fail loud if two concurrent transactions share a `replica_id` (ADR-0044).
+///
+/// A single linear writer's transactions form a chain — every pair is in an
+/// ancestor relation. Two transactions that share a `replica_id` yet are
+/// concurrent (neither is an ancestor of the other) therefore cannot have come
+/// from one writer: the copy trap manifested. Rather than silently merging a
+/// corrupt-but-linear-looking history, surface the colliding pair.
+fn check_replica_collisions(
+    headers: &HashMap<Uuid, TransactionHeader>,
+) -> Result<(), FsEventStoreError> {
+    let mut by_replica: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
+    for header in headers.values() {
+        by_replica
+            .entry(header.replica_id)
+            .or_default()
+            .push(header.transaction_id);
+    }
+    for (replica_id, mut transactions) in by_replica {
+        if transactions.len() < 2 {
+            continue;
+        }
+        transactions.sort();
+        for i in 0..transactions.len() {
+            for j in (i + 1)..transactions.len() {
+                let (first, second) = (transactions[i], transactions[j]);
+                if !is_ancestor(first, second, headers) && !is_ancestor(second, first, headers) {
+                    return Err(FsEventStoreError::ReplicaIdentityConflict {
+                        first,
+                        second,
+                        replica_id,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn detect_forks_in(
     headers: &HashMap<Uuid, TransactionHeader>,
 ) -> Result<Vec<Fork>, FsEventStoreError> {
+    check_replica_collisions(headers)?;
+
     // Group transactions by the (stream, base) they claimed to extend.
     let mut groups: BTreeMap<(String, usize), Vec<Uuid>> = BTreeMap::new();
     for header in headers.values() {
