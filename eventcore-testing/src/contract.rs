@@ -1,7 +1,7 @@
 use eventcore_types::{
     BatchSize, CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore,
-    EventStoreError, ProjectorCoordinator, StreamId, StreamPosition, StreamPrefix, StreamVersion,
-    StreamWrites,
+    EventStoreError, ProjectorCoordinator, StreamId, StreamPattern, StreamPosition, StreamPrefix,
+    StreamVersion, StreamWrites,
 };
 
 use serde::{Deserialize, Serialize};
@@ -514,7 +514,9 @@ macro_rules! backend_contract_tests {
                 test_coordination_second_instance_blocked, test_event_ordering_across_streams,
                 test_missing_stream_reads, test_position_based_resumption,
                 test_read_stream_errors_on_type_mismatch, test_stream_isolation,
-                test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
+                test_stream_pattern_char_class, test_stream_pattern_filtering,
+                test_stream_pattern_single_char, test_stream_prefix_filtering,
+                test_stream_prefix_requires_prefix_match,
             };
 
             #[tokio::test(flavor = "multi_thread")]
@@ -583,6 +585,27 @@ macro_rules! backend_contract_tests {
             #[tokio::test(flavor = "multi_thread")]
             async fn stream_prefix_requires_prefix_match_contract() {
                 test_stream_prefix_requires_prefix_match($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn stream_pattern_filtering_contract() {
+                test_stream_pattern_filtering($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn stream_pattern_single_char_contract() {
+                test_stream_pattern_single_char($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn stream_pattern_char_class_contract() {
+                test_stream_pattern_char_class($make_store)
                     .await
                     .expect("event reader contract failed");
             }
@@ -1038,6 +1061,272 @@ where
         return Err(ContractTestFailure::assertion(
             SCENARIO,
             "BUG EXPOSED: got event from stream starting with 'my-account-456' when filtering for prefix 'account-' - implementation must use prefix matching from the start of the stream ID",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Glob `*` wildcard pattern filtering selects only matching streams.
+///
+/// Per ADR-0047, `EventFilter::pattern` matches stream IDs against a POSIX glob
+/// pattern. The wildcard `*` matches any sequence of characters (including the
+/// stream separator `/`). This test proves the filter is applied at the query
+/// level: it appends enough non-matching events to cross the pagination `LIMIT`
+/// boundary before any matching events, so an implementation that applied `LIMIT`
+/// before the pattern filter would return zero matches.
+pub async fn test_stream_pattern_filtering<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + EventReader + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "stream_pattern_filtering";
+
+    let store = make_store();
+    let run = Uuid::now_v7();
+
+    // Given: many non-matching "order-*" streams followed by two matching
+    // "account-*" streams. The non-matching events alone exceed the page limit.
+    let mut writes = StreamWrites::new();
+    let mut order_streams = Vec::new();
+    for _ in 0..50 {
+        let order = StreamId::try_new(format!("order-{}", Uuid::now_v7())).map_err(|e| {
+            ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+        })?;
+        writes = register_contract_stream(SCENARIO, writes, &order, StreamVersion::new(0))?;
+        order_streams.push(order);
+    }
+
+    let account_1 = StreamId::try_new(format!("account-1-{run}")).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+    let account_2 = StreamId::try_new(format!("account-2-{run}")).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+    writes = register_contract_stream(SCENARIO, writes, &account_1, StreamVersion::new(0))?;
+    writes = register_contract_stream(SCENARIO, writes, &account_2, StreamVersion::new(0))?;
+
+    for order in &order_streams {
+        writes = append_contract_event(SCENARIO, writes, order)?;
+    }
+    writes = append_contract_event(SCENARIO, writes, &account_1)?;
+    writes = append_contract_event(SCENARIO, writes, &account_2)?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    // When: Reading with glob pattern "account-*" and a page limit smaller than
+    // the number of non-matching events that precede the matches.
+    let pattern = StreamPattern::try_new("account-*").map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("failed to create stream pattern: {}", e))
+    })?;
+    let filter = EventFilter::pattern(pattern);
+    let page = EventPage::first(BatchSize::new(10));
+    let events = store
+        .read_events::<ContractTestEvent>(filter, page)
+        .await
+        .map_err(|_error| {
+            ContractTestFailure::assertion(
+                SCENARIO,
+                "read_events failed with stream pattern filter",
+            )
+        })?;
+
+    // Then: exactly the two "account-*" events are returned. If the limit were
+    // applied before filtering, this would be zero.
+    if events.len() != 2 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected exactly 2 events matching glob 'account-*' but got {} (pattern filter must be applied before the page limit)",
+                events.len()
+            ),
+        ));
+    }
+
+    for (event, _) in events.iter() {
+        let stream_id_str = event.stream_id().as_ref();
+        if !stream_id_str.starts_with("account-") {
+            return Err(ContractTestFailure::assertion(
+                SCENARIO,
+                format!(
+                    "expected all events from streams matching 'account-*' but found event from {}",
+                    stream_id_str
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Contract test: Glob `?` matches exactly one character.
+///
+/// Per ADR-0047, `?` matches a single arbitrary character. Pattern `account-?`
+/// must match `account-1` but not `account-12` (two trailing characters) and
+/// not `order-1`.
+pub async fn test_stream_pattern_single_char<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + EventReader + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "stream_pattern_single_char";
+
+    let store = make_store();
+    let run = Uuid::now_v7();
+
+    // Given: one single-char-suffix stream, one two-char-suffix stream, one order.
+    let account_x = StreamId::try_new(format!("account-x{run}")).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+    let account_xy = StreamId::try_new(format!("account-xy{run}")).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+    let order = StreamId::try_new(format!("order-z{run}")).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+
+    let mut writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &account_x,
+        StreamVersion::new(0),
+    )?;
+    writes = register_contract_stream(SCENARIO, writes, &account_xy, StreamVersion::new(0))?;
+    writes = register_contract_stream(SCENARIO, writes, &order, StreamVersion::new(0))?;
+
+    writes = append_contract_event(SCENARIO, writes, &account_x)?;
+    writes = append_contract_event(SCENARIO, writes, &account_xy)?;
+    writes = append_contract_event(SCENARIO, writes, &order)?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    // When: Reading with glob pattern "account-?{run}" (single char between
+    // "account-" and the run suffix).
+    let pattern = StreamPattern::try_new(format!("account-?{run}")).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("failed to create stream pattern: {}", e))
+    })?;
+    let filter = EventFilter::pattern(pattern);
+    let page = EventPage::first(BatchSize::new(100));
+    let events = store
+        .read_events::<ContractTestEvent>(filter, page)
+        .await
+        .map_err(|_error| {
+            ContractTestFailure::assertion(
+                SCENARIO,
+                "read_events failed with stream pattern filter",
+            )
+        })?;
+
+    // Then: only "account-x{run}" matches (single char). "account-xy{run}" has
+    // two chars; "order-z{run}" has the wrong prefix.
+    if events.len() != 1 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected exactly 1 event matching glob 'account-?{run}' but got {}",
+                events.len()
+            ),
+        ));
+    }
+
+    let (event, _) = &events[0];
+    let stream_id_str = event.stream_id().as_ref();
+    if stream_id_str != account_x.as_ref() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected the single-character match {} but got {}",
+                account_x.as_ref(),
+                stream_id_str
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Glob `[0-9]` character class matches a single digit.
+///
+/// Per ADR-0047, a bracketed character class `[...]` matches one character from
+/// the set. Pattern `account-[0-9]*` must match streams whose suffix begins with
+/// a digit and reject those beginning with a non-digit.
+pub async fn test_stream_pattern_char_class<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + EventReader + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "stream_pattern_char_class";
+
+    let store = make_store();
+    let run = Uuid::now_v7().simple().to_string();
+
+    // Given: a digit-prefixed account stream and a letter-prefixed account stream.
+    let digit_stream = StreamId::try_new(format!("account-7-{run}")).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+    let letter_stream = StreamId::try_new(format!("account-a-{run}")).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+
+    let mut writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &digit_stream,
+        StreamVersion::new(0),
+    )?;
+    writes = register_contract_stream(SCENARIO, writes, &letter_stream, StreamVersion::new(0))?;
+
+    writes = append_contract_event(SCENARIO, writes, &digit_stream)?;
+    writes = append_contract_event(SCENARIO, writes, &letter_stream)?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    // When: Reading with glob pattern "account-[0-9]*".
+    let pattern = StreamPattern::try_new("account-[0-9]*").map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("failed to create stream pattern: {}", e))
+    })?;
+    let filter = EventFilter::pattern(pattern);
+    let page = EventPage::first(BatchSize::new(100));
+    let events = store
+        .read_events::<ContractTestEvent>(filter, page)
+        .await
+        .map_err(|_error| {
+            ContractTestFailure::assertion(
+                SCENARIO,
+                "read_events failed with stream pattern filter",
+            )
+        })?;
+
+    // Then: only the digit-prefixed stream matches.
+    if events.len() != 1 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected exactly 1 event matching glob 'account-[0-9]*' but got {}",
+                events.len()
+            ),
+        ));
+    }
+
+    let (event, _) = &events[0];
+    let stream_id_str = event.stream_id().as_ref();
+    if stream_id_str != digit_stream.as_ref() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected the digit-prefixed match {} but got {}",
+                digit_stream.as_ref(),
+                stream_id_str
+            ),
         ));
     }
 

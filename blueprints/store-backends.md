@@ -103,8 +103,28 @@ All backends share:
 - JSON serialization for event storage
 - UUID7 for global event ordering
 - Per-stream version tracking (event count from 0)
-- Stream prefix filtering for EventReader
+- `EventFilter`-based filtering for EventReader, applied **before** the pagination
+  `LIMIT` so non-matching events never consume batch slots
 - Checkpoint-based resumable projection processing
+
+### EventFilter Pushdown
+
+`EventFilter` selects events by stream identity (literal `StreamPrefix` **or** glob
+`StreamPattern`, mutually exclusive) and optional event type. Each backend pushes the
+predicate down to its query layer (ADR-0047):
+
+| Backend    | Prefix              | Glob pattern                                       |
+| ---------- | ------------------- | -------------------------------------------------- |
+| PostgreSQL | `stream_id LIKE $n` | `stream_id ~ $n` (anchored, injection-safe regex)  |
+| SQLite     | `stream_id LIKE ?`  | `stream_id GLOB ?` (native POSIX glob)             |
+| In-memory  | `starts_with`       | `StreamPattern::matches` (in-process, before take) |
+| File       | `starts_with`       | `StreamPattern::matches` (in-process, before take) |
+
+The Postgres glob→regex translation maps `*`→`.*`, `?`→`.`, keeps `[...]` character
+classes (`[!`→`[^`), escapes all regex metacharacters in literal segments, and
+anchors with `^...$`. Postgres and SQLite build their `read_events` query
+dynamically so prefix XOR pattern + cursor + event_type compose without a
+combinatorial set of hand-written query strings.
 
 ## Deployment Patterns
 
@@ -145,3 +165,5 @@ eventcore = { version = "0.6", features = ["sqlite"] }
 - ADR-011: In-memory store crate location
 - ADR-022: Crate reorganization for feature flags
 - ADR-0038 through ADR-0046: File backend format, linearization, locking, and merge mode
+- ADR-017: Reserved characters for StreamId and StreamPrefix
+- ADR-0047: Glob pattern matching for subscriptions (EventFilter pushdown)

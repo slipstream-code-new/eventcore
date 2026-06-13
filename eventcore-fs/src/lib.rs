@@ -312,6 +312,7 @@ impl EventReader for FileEventStore {
         let after = page.after_position().map(|position| position.into_inner());
         let limit = page.limit().into_inner();
         let prefix = filter.stream_prefix();
+        let pattern = filter.stream_pattern();
         let explicit_type = filter.event_type();
 
         // Pagination walks local-ingestion order (ADR-0043(c)): events are
@@ -329,6 +330,13 @@ impl EventReader for FileEventStore {
             .filter(|(_, indexed)| match prefix {
                 None => true,
                 Some(prefix) => indexed.stream_id.starts_with(prefix.as_ref()),
+            })
+            .filter(|(_, indexed)| match pattern {
+                // Glob pattern filtering (ADR-0047) is applied at the query
+                // level, before take(), so non-matching streams don't consume
+                // batch slots.
+                None => true,
+                Some(pattern) => pattern.matches(&indexed.stream_id),
             })
             .filter(|(_, indexed)| {
                 let wanted = explicit_type.unwrap_or_else(|| E::event_type_name());

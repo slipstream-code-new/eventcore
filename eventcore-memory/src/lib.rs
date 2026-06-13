@@ -225,6 +225,14 @@ impl EventReader for InMemoryEventStore {
                 }
             })
             .filter(|entry| {
+                // Filter by glob pattern (ADR-0047) at the query level, before
+                // take(), so non-matching streams don't consume batch slots.
+                match filter.stream_pattern() {
+                    None => true,
+                    Some(pattern) => pattern.matches(&entry.stream_id),
+                }
+            })
+            .filter(|entry| {
                 // Filter by event_type BEFORE take() so non-matching types
                 // don't consume batch slots (fixes issue #372).
                 // Use explicit filter if set, otherwise derive from E::event_type_name().
