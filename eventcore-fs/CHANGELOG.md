@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-fs-v0.8.1...eventcore-fs-v0.9.0) - 2026-06-13
+
+### Features
+
+- *(eventcore-fs)* local-ingestion cursor for projections ([#398](https://git.johnwilger.com/Slipstream/eventcore/pulls/398))
+- *(eventcore-fs)* replica-id fingerprint + conflict check ([#400](https://git.johnwilger.com/Slipstream/eventcore/pulls/400))
+- *(eventcore-fs)* read-time fsck + dangling-transaction handling ([#402](https://git.johnwilger.com/Slipstream/eventcore/pulls/402))
+
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-fs-v0.8.0...eventcore-fs-v0.8.1) - 2026-06-13
 
 ### Features
