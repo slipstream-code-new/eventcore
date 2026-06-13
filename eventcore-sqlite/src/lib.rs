@@ -9,7 +9,7 @@ use eventcore_types::{
 };
 pub use rusqlite;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
+use rusqlite::{params, params_from_iter};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn};
@@ -414,6 +414,12 @@ impl EventStore for SqliteEventStore {
                 .map(|(sid, v)| (sid, v.into_inner()))
                 .collect();
 
+            // Assign per-stream versions and serialize each event once, building
+            // the flat list of bound values for a multi-row INSERT. All events in
+            // this call share one transaction, so they can be written in a single
+            // (chunked) statement rather than one round-trip per event.
+            let mut bound_values: Vec<rusqlite::types::Value> =
+                Vec::with_capacity(entries.len() * COLUMNS_PER_ROW);
             for entry in &entries {
                 let StreamWriteEntry {
                     stream_id,
@@ -438,23 +444,32 @@ impl EventStore for SqliteEventStore {
                     }
                 })?;
 
-                let _ = tx.execute(
-                    "INSERT INTO eventcore_events (event_id, stream_id, stream_version, event_type, event_data, metadata)
-                     VALUES (?1, ?2, ?3, ?4, ?5, '{}')",
-                    params![
-                        event_id,
-                        stream_id.as_ref(),
-                        version,
-                        event_type,
-                        event_json,
-                    ],
-                )
-                .map_err(|e| {
-                    error!(error = %e, "[sqlite.append_events] insert failed");
-                    EventStoreError::StoreFailure {
-                        operation: Operation::AppendEvents,
-                    }
-                })?;
+                bound_values.push(rusqlite::types::Value::Text(event_id));
+                bound_values.push(rusqlite::types::Value::Text(stream_id.as_ref().to_string()));
+                bound_values.push(rusqlite::types::Value::Integer(version as i64));
+                bound_values.push(rusqlite::types::Value::Text(event_type.to_string()));
+                bound_values.push(rusqlite::types::Value::Text(event_json));
+            }
+
+            // Chunk so the bound-parameter count stays well under SQLite's
+            // SQLITE_MAX_VARIABLE_NUMBER limit regardless of build configuration.
+            const COLUMNS_PER_ROW: usize = 5;
+            const MAX_ROWS_PER_INSERT: usize = 100;
+            const ROW_PLACEHOLDER: &str = "(?,?,?,?,?,'{}')";
+            for chunk in bound_values.chunks(MAX_ROWS_PER_INSERT * COLUMNS_PER_ROW) {
+                let row_count = chunk.len() / COLUMNS_PER_ROW;
+                let values_clause = vec![ROW_PLACEHOLDER; row_count].join(",");
+                let sql = format!(
+                    "INSERT INTO eventcore_events (event_id, stream_id, stream_version, event_type, event_data, metadata) VALUES {values_clause}"
+                );
+                let _ = tx
+                    .execute(&sql, params_from_iter(chunk.iter()))
+                    .map_err(|e| {
+                        error!(error = %e, "[sqlite.append_events] insert failed");
+                        EventStoreError::StoreFailure {
+                            operation: Operation::AppendEvents,
+                        }
+                    })?;
             }
 
             tx.commit().map_err(|e| {
