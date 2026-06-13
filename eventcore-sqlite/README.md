@@ -1,6 +1,6 @@
 # eventcore-sqlite
 
-SQLite backend for the [EventCore](https://github.com/jwilger/eventcore)
+SQLite backend for the [EventCore](https://git.johnwilger.com/Slipstream/eventcore)
 event-sourcing library, built on `rusqlite`.
 
 ## Cargo features

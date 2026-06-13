@@ -6,24 +6,26 @@ This document describes the release process for the EventCore workspace.
 
 The project uses **[release-plz](https://release-plz.dev/)** for fully automated releases with a two-phase workflow (see ADR-025):
 
-**Phase 1: Release PR Creation** (`.github/workflows/release-plz.yml`)
+**Phase 1: Release PR Creation** (`.forgejo/workflows/release-plz.yml`)
+
 - Triggered on push to `main` (except release PR merges)
 - Analyzes commits using conventional commits for semver detection
-- **Enforces lockstep major/minor versioning** (see ADR-025 and "Version Lockstep Enforcement" section below)
+- **Enforces lockstep versioning via workspace version inheritance** (see ADR-025 and "Version Lockstep Enforcement" section below)
 - Creates/updates release PR with version bumps and changelog
 - PR must pass all CI quality gates before merge
 
-**Phase 2: Publication** (`.github/workflows/publish.yml`)
+**Phase 2: Publication** (`.forgejo/workflows/publish.yml`)
+
 - Triggered when release PR is merged (commit message starts with "chore: release")
 - Publishes crates to crates.io in dependency order
-- Creates GitHub release with aggregated changelog
+- Creates Forgejo release with aggregated changelog
 - Creates git tags for the release
 
 This ensures reliable, automated releases without manual intervention while maintaining:
 
 - Correct dependency ordering during publishing (release-plz)
 - Retry logic with exponential backoff for transient failures (release-plz)
-- Consistent changelog generation and GitHub releases (release-plz)
+- Consistent changelog generation and Forgejo releases (release-plz)
 - Automated version management and PR creation (release-plz)
 - Quality gates enforcement (CI must pass before release PR can merge)
 
@@ -31,9 +33,9 @@ This ensures reliable, automated releases without manual intervention while main
 
 ### Package Publishing Order
 
-cargo-workspaces automatically determines and uses the correct publishing order based on the dependency graph. It handles the topological sorting internally, ensuring packages are always published in the correct order.
+release-plz automatically determines and uses the correct publishing order based on the dependency graph. It handles the topological sorting internally, ensuring packages are always published in the correct order.
 
-**The dependency graph (automatically handled by cargo-workspaces):**
+**The dependency graph (automatically handled by release-plz):**
 
 1. `eventcore-types` (no internal dependencies - shared types)
 2. `eventcore-macros` (no internal dependencies - proc macros)
@@ -50,50 +52,30 @@ The workflow includes a 30-second delay between publishing each crate to ensure 
 
 **Per ADR-025**, all workspace crates must maintain **identical major.minor versions**, while patch versions may differ independently. This ensures a clear compatibility guarantee for users: matching major/minor versions are always compatible.
 
-**The Problem:**
-release-plz analyzes each crate independently for semver bumps. When one crate has breaking changes, only that crate gets bumped to a new major/minor version, creating version skew.
+**How it is enforced:**
+The workspace `Cargo.toml` defines a single `[workspace.package] version`, and
+every member crate declares `version.workspace = true`. There is exactly one
+version number in the entire workspace, so version skew is structurally
+impossible. When release-plz bumps the version, it bumps the shared workspace
+version and all crates move together.
 
-**Example without enforcement:**
+**Example:**
+
 ```
-eventcore-types: 0.2.0 → 0.3.0 (breaking change detected)
-eventcore: 0.2.0 → 0.2.1 (no changes)
-❌ Version skew: eventcore-types at 0.3.0, eventcore at 0.2.1
+Workspace at 0.8.0, eventcore-types gets a breaking change:
+  [workspace.package] version: 0.8.0 → 0.9.0
+✅ All crates released at 0.9.0
 ```
-
-**The Solution:**
-The release workflow uses a three-step process to enforce lockstep versioning:
-
-1. **`release-plz update`** - Analyzes commits and updates versions based on semver
-2. **`enforce-lockstep-versions.sh`** - Adjusts all crates to the highest major.minor version
-3. **`release-plz release-pr`** - Creates/updates the PR with lockstep-enforced versions
-
-**Example with enforcement:**
-```
-After semver analysis:
-  eventcore-types: 0.2.0 → 0.3.0 (breaking change)
-  eventcore: 0.2.0 → 0.2.1 (no changes)
-
-After lockstep enforcement:
-  eventcore-types: 0.3.0 (unchanged)
-  eventcore: 0.2.1 → 0.3.1 (major.minor bumped, patch preserved)
-✅ All crates at 0.3.x
-```
-
-**CI Validation:**
-The `version-lockstep` CI job (`.github/workflows/ci.yml`) validates that all crates share identical major.minor versions on every PR and push. This prevents manual Cargo.toml edits from violating the lockstep policy.
-
-**Verification Scripts:**
-- `.github/scripts/enforce-lockstep-versions.sh` - Fixes version skew (used in release workflow)
-- `.github/scripts/validate-lockstep-versions.sh` - Validates lockstep compliance (used in CI)
-- `.github/scripts/test-lockstep-scripts.sh` - Integration tests for the scripts
 
 **When Major/Minor Bumps Occur:**
 When ANY crate requires a major or minor version bump (breaking change or new feature), ALL workspace crates receive the same major.minor bump. This may mean:
+
 - `eventcore` bumps from 0.2.0 → 0.3.0 even if only `eventcore-types` had breaking changes
 - Users see an "update" for all crates, even if some have no code changes
 - The changelog for unchanged crates will note "Version bump for workspace lockstep compliance"
 
 **Why This Matters:**
+
 - Users can depend on `eventcore = "0.3"` and `eventcore-postgres = "0.3"` knowing they're compatible
 - No need for a compatibility matrix or guessing which versions work together
 - Follows the same pattern as other workspace projects (e.g., tokio)
@@ -146,7 +128,7 @@ git tag -a eventcore-testing-v0.X.Y -m "Release eventcore-testing v0.X.Y"
 git tag -a eventcore-memory-v0.X.Y -m "Release eventcore-memory v0.X.Y"
 git tag -a eventcore-postgres-v0.X.Y -m "Release eventcore-postgres v0.X.Y"
 
-# 4. Push tags to GitHub
+# 4. Push tags to Forgejo
 git push origin --tags
 ```
 
@@ -165,9 +147,10 @@ This separation prevents manual version bumps from triggering immediate publishi
 
 ### crates.io Publishing Token
 
-The automated workflow uses a `CARGO_REGISTRY_TOKEN` stored as a GitHub Actions secret to authenticate with crates.io during publishing.
+The automated workflow uses a `CARGO_REGISTRY_TOKEN` stored as a Forgejo Actions secret (set at the Slipstream organization level) to authenticate with crates.io during publishing.
 
 **Required permissions:**
+
 - Publish access to all EventCore workspace crates
 - Owner or team member with publish rights
 
@@ -191,15 +174,15 @@ To rotate the crates.io publishing token:
    - Log in to [crates.io](https://crates.io/)
    - Navigate to Account Settings → API Tokens
    - Click "New Token"
-   - Name: `EventCore GitHub Actions` (or similar)
+   - Name: `Slipstream Forgejo Actions` (or similar)
    - Scopes: `publish-update` (allows publishing new versions)
    - Click "Generate"
    - Copy the token immediately (it won't be shown again)
 
-2. **Update GitHub Actions secret:**
-   - Navigate to repository Settings → Secrets and variables → Actions
-   - Find `CARGO_REGISTRY_TOKEN` in repository secrets
-   - Click "Update" and paste the new token
+2. **Update Forgejo Actions secret:**
+   - Navigate to the Slipstream organization Settings → Actions → Secrets
+   - Find `CARGO_REGISTRY_TOKEN` in organization secrets
+   - Click "Edit" and paste the new token
    - Save changes
 
 3. **Revoke old token:**
@@ -210,10 +193,11 @@ To rotate the crates.io publishing token:
 
 4. **Verify new token works:**
    - Trigger a test release or wait for the next automated release
-   - Monitor the GitHub Actions workflow logs
+   - Monitor the Forgejo Actions workflow logs
    - Verify successful authentication and publishing
 
 **Recommended rotation schedule:**
+
 - Rotate tokens annually
 - Rotate immediately if token is compromised or exposed
 - Rotate when team members with token access leave the project
@@ -238,7 +222,7 @@ If you see errors about version requirements not being met:
 
 If you see "no token found" or "authentication failed" errors:
 
-1. Verify `CARGO_REGISTRY_TOKEN` is set in GitHub Actions secrets
+1. Verify `CARGO_REGISTRY_TOKEN` is set in Forgejo Actions secrets (Slipstream organization level)
 2. Check that the token hasn't expired or been revoked on crates.io
 3. Verify the token has `publish-update` permissions
 4. Rotate the token following the credential rotation procedure above
@@ -254,33 +238,16 @@ Always ensure pre-commit hooks pass before attempting to publish. The hooks run:
 
 ### Version lockstep violations
 
-If the CI `version-lockstep` job fails, it means one or more crates have major.minor versions that don't match:
+Lockstep versioning is enforced structurally: the only version number in the
+workspace is `[workspace.package] version` in the root `Cargo.toml`, and every
+member crate uses `version.workspace = true`. Version skew is only possible if
+a member crate replaces `version.workspace = true` with an explicit `version`
+field.
 
-**Diagnosis:**
-```bash
-# Run the validation script locally
-./.github/scripts/validate-lockstep-versions.sh
-```
-
-**Fix:**
-```bash
-# Run the enforcement script to fix version skew
-./.github/scripts/enforce-lockstep-versions.sh
-
-# Review the changes
-git diff '**/Cargo.toml'
-
-# Commit the fixes
-git add '**/Cargo.toml'
-git commit -m "fix: enforce lockstep major.minor versioning (ADR-025)"
-```
-
-**Common Causes:**
-- Manual Cargo.toml edits that didn't update all crates
-- Merge conflicts resolved incorrectly
-- Cherry-picking commits that touched versions
+**Fix:** restore `version.workspace = true` in the offending crate's
+`Cargo.toml` and let the workspace version govern.
 
 **Prevention:**
+
 - Let the automated release workflow manage versions
-- Avoid manual version bumps in Cargo.toml files
-- If manual edits are necessary, run the enforcement script before committing
+- Never add an explicit `version` field to a member crate's `Cargo.toml`

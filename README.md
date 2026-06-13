@@ -1,6 +1,6 @@
 # EventCore
 
-[![CI](https://github.com/jwilger/eventcore/workflows/CI/badge.svg)](https://github.com/jwilger/eventcore/actions)
+[![CI](https://git.johnwilger.com/Slipstream/eventcore/badges/workflows/ci.yml/badge.svg?branch=main)](https://git.johnwilger.com/Slipstream/eventcore/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **⚠️ EXPERIMENTAL - NOT READY FOR USE**
