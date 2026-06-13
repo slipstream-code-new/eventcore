@@ -58,7 +58,12 @@ jobs:
         env:
           # Use PAT instead of GITHUB_TOKEN to trigger CI on release PR
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          GIT_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
         run: |
+          # Credentials for release-plz's temp-clone git pushes (checkout@v6
+          # scopes its own credentials to the workspace gitdir)
+          . ./.forgejo/scripts/configure-release-plz-git-auth.sh
+
           # release-plz creates/updates PR with version bumps and changelog
           # Lockstep versioning enforced via workspace version inheritance
           # (see workspace Cargo.toml and ADR-025)
