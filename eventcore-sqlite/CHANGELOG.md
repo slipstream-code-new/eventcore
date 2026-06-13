@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v0.9.0...eventcore-sqlite-v0.9.1) - 2026-06-13
+
+### Performance
+
+- *(eventcore-sqlite)* batch INSERT in append_events ([#362](https://git.johnwilger.com/Slipstream/eventcore/pulls/362)) ([#404](https://git.johnwilger.com/Slipstream/eventcore/pulls/404))
+
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v0.8.0...eventcore-sqlite-v0.8.1) - 2026-06-13
 
 ### Miscellaneous Tasks
