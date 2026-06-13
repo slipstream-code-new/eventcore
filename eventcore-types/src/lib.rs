@@ -32,5 +32,5 @@ pub use projection::{
 };
 pub use store::{
     EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
-    StreamPrefix, StreamVersion, StreamWriteEntry, StreamWrites,
+    StreamPattern, StreamPrefix, StreamVersion, StreamWriteEntry, StreamWrites,
 };

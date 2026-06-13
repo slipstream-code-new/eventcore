@@ -54,6 +54,29 @@ run_projection(projector, backend)
 - Non-blocking (ADR-028): returns immediately, caller decides what to do on failure
 - Guard released on drop
 
+### Subscription Filtering (EventFilter)
+
+`EventReader::read_events(filter, page)` selects which events a projection sees.
+`EventFilter` narrows the global stream by stream identity and event type:
+
+- `EventFilter::all()` — every event
+- `EventFilter::prefix(StreamPrefix)` — literal "starts with" match on the stream id
+- `EventFilter::pattern(StreamPattern)` — POSIX glob match on the whole stream id
+  (`*`, `?`, `[...]`; `*` matches across `/`) — see ADR-0047
+- `.with_event_type(name)` — narrow either of the above to a single event type
+
+Stream identity is selected by **either** a prefix **or** a glob pattern (mutually
+exclusive). `StreamPrefix` rejects glob metacharacters and `StreamPattern` requires
+valid glob syntax, so the literal-vs-pattern boundary is enforced at construction
+(parse-don't-validate, ADR-017 / ADR-0047).
+
+All three predicates are pushed down to the backend and applied **before** the
+pagination `LIMIT`, so non-matching events never consume batch slots and matches are
+never skipped across page boundaries. Backends push down as follows: PostgreSQL uses
+`LIKE`/`~` (glob translated to an anchored, injection-safe POSIX regex), SQLite uses
+`LIKE`/native `GLOB`, and the in-memory and file stores filter in-process via
+`StreamPattern::matches`. See `store-backends.md` for backend detail.
+
 ### Configuration
 
 **ProjectionConfig** (public builder):
@@ -128,3 +151,5 @@ also internal types.
 - ADR-030: Layered API surface for application vs. backend developers
 - ADR-036: Continuous polling via ProjectionRunner
 - ADR-037: ProjectionConfig via free function
+- ADR-017: Reserved characters for StreamId and StreamPrefix
+- ADR-0047: Glob pattern matching for subscriptions

@@ -771,6 +771,7 @@ dependencies = [
 name = "eventcore-types"
 version = "0.9.0"
 dependencies = [
+ "glob",
  "nutype",
  "proptest",
  "serde",

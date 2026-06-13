@@ -5,7 +5,7 @@
 //! - `EventReader`: Trait for reading events globally for projections
 //! - `StreamPosition`: Global position in the event stream
 
-use crate::store::StreamPrefix;
+use crate::store::{StreamPattern, StreamPrefix};
 use nutype::nutype;
 use std::future::Future;
 use uuid::Uuid;
@@ -497,9 +497,14 @@ impl EventPage {
 
 /// Filter criteria for selecting which events to read from the event store.
 ///
-/// EventFilter specifies filtering criteria (e.g., stream prefix) separate from
-/// pagination concerns (position and limit). Use `::all()` to match all events,
-/// or `::prefix()` to filter by stream ID prefix.
+/// EventFilter specifies filtering criteria (e.g., stream prefix or glob
+/// pattern) separate from pagination concerns (position and limit). Use
+/// `::all()` to match all events, `::prefix()` to filter by literal stream ID
+/// prefix, or `::pattern()` to filter by POSIX glob pattern.
+///
+/// A filter selects streams by EITHER a literal prefix OR a glob pattern; the
+/// two are mutually exclusive (each constructor sets only one). Both can be
+/// further narrowed to a single event type via [`EventFilter::with_event_type`].
 ///
 /// # Examples
 ///
@@ -507,12 +512,16 @@ impl EventPage {
 /// // Match all events
 /// let filter = EventFilter::all();
 ///
-/// // Filter by stream prefix
-/// let filter = EventFilter::prefix("account-");
+/// // Filter by literal stream prefix
+/// let filter = EventFilter::prefix(StreamPrefix::try_new("account-").unwrap());
+///
+/// // Filter by glob pattern
+/// let filter = EventFilter::pattern(StreamPattern::try_new("account-*").unwrap());
 /// ```
 #[derive(Debug, Clone)]
 pub struct EventFilter {
     stream_prefix: Option<StreamPrefix>,
+    stream_pattern: Option<StreamPattern>,
     event_type: Option<String>,
 }
 
@@ -524,6 +533,7 @@ impl EventFilter {
     pub fn all() -> Self {
         Self {
             stream_prefix: None,
+            stream_pattern: None,
             event_type: None,
         }
     }
@@ -543,6 +553,29 @@ impl EventFilter {
     pub fn prefix(prefix: StreamPrefix) -> Self {
         Self {
             stream_prefix: Some(prefix),
+            stream_pattern: None,
+            event_type: None,
+        }
+    }
+
+    /// Create a filter that matches events from streams matching the given
+    /// POSIX glob pattern.
+    ///
+    /// Only events whose entire stream ID matches the pattern will match. See
+    /// [`StreamPattern`] for the supported glob syntax (`*`, `?`, `[...]`).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use eventcore_types::{EventFilter, StreamPattern};
+    ///
+    /// let pattern = StreamPattern::try_new("account-*").unwrap();
+    /// let filter = EventFilter::pattern(pattern);
+    /// ```
+    pub fn pattern(pattern: StreamPattern) -> Self {
+        Self {
+            stream_prefix: None,
+            stream_pattern: Some(pattern),
             event_type: None,
         }
     }
@@ -564,6 +597,14 @@ impl EventFilter {
     /// if this filter matches all streams.
     pub fn stream_prefix(&self) -> Option<&StreamPrefix> {
         self.stream_prefix.as_ref()
+    }
+
+    /// Get the stream pattern filter, if any.
+    ///
+    /// Returns `Some(&StreamPattern)` if a glob pattern filter is set, or
+    /// `None` if this filter does not filter by pattern.
+    pub fn stream_pattern(&self) -> Option<&StreamPattern> {
+        self.stream_pattern.as_ref()
     }
 
     /// Get the event type filter, if any.

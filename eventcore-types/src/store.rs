@@ -1,5 +1,5 @@
 use crate::command::Event;
-use crate::validation::no_glob_metacharacters;
+use crate::validation::{is_valid_glob_pattern, no_glob_metacharacters};
 use nutype::nutype;
 use serde_json::value::RawValue;
 use std::collections::HashMap;
@@ -264,13 +264,13 @@ pub struct StreamId(String);
 /// - Within reasonable length (max 255 characters)
 /// - Sanitized (leading/trailing whitespace removed)
 ///
-/// Note: StreamPrefix performs literal prefix matching only. Any characters
-/// appearing in a prefix (including *, ?, [, ]) are treated as ordinary
-/// characters and do not provide glob-style pattern matching. Future support
-/// for glob pattern matching will be provided by a dedicated StreamPattern type.
+/// Note: StreamPrefix performs literal prefix matching only. Per ADR-017 it
+/// rejects glob metacharacters (*, ?, [, ]) at construction so that literal
+/// prefixes can never be confused with glob patterns. Glob pattern matching is
+/// provided by the dedicated [`StreamPattern`] type (ADR-0047).
 #[nutype(
     sanitize(trim),
-    validate(not_empty, len_char_max = 255),
+    validate(not_empty, len_char_max = 255, predicate = no_glob_metacharacters),
     derive(
         Debug,
         Clone,
@@ -286,6 +286,73 @@ pub struct StreamId(String);
     )
 )]
 pub struct StreamPrefix(String);
+
+/// Stream pattern domain type for filtering events by POSIX glob pattern.
+///
+/// StreamPattern represents a POSIX glob pattern (per ADR-017 and ADR-0047)
+/// used to filter events from streams whose IDs match the pattern. Unlike
+/// [`StreamPrefix`], which performs literal "starts with" matching, a
+/// StreamPattern matches the *entire* stream ID against glob syntax:
+///
+/// - `*` matches any sequence of characters, including the stream separator
+///   `/` (the `glob` crate's `Pattern::matches` treats `/` as an ordinary
+///   character — there is no `require_literal_separator` distinction)
+/// - `?` matches exactly one character
+/// - `[...]` matches one character from the bracketed set or range
+///   (e.g. `[0-9]`, `[a-z]`)
+///
+/// Uses nutype for validation ensuring all patterns are:
+/// - Non-empty (at least 1 character after trimming)
+/// - Within reasonable length (max 255 characters)
+/// - Sanitized (leading/trailing whitespace removed)
+/// - Compilable as a `glob::Pattern` (parse-don't-validate: an invalid pattern
+///   such as an unclosed character class can never be constructed)
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::StreamPattern;
+///
+/// let pattern = StreamPattern::try_new("account-*").unwrap();
+/// assert!(pattern.matches("account-123"));
+/// assert!(!pattern.matches("order-1"));
+/// ```
+#[nutype(
+    sanitize(trim),
+    validate(not_empty, len_char_max = 255, predicate = is_valid_glob_pattern),
+    derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        Into,
+        AsRef,
+        Deref,
+        Display,
+        Serialize,
+        Deserialize
+    )
+)]
+pub struct StreamPattern(String);
+
+impl StreamPattern {
+    /// Test whether the given stream ID matches this glob pattern.
+    ///
+    /// The whole `stream_id` is matched against the pattern. The wildcard `*`
+    /// matches across the stream separator `/`, consistent with the `glob`
+    /// crate's default `Pattern::matches` behavior.
+    ///
+    /// Construction validation guarantees the pattern compiles, so the
+    /// theoretically-impossible compile failure is treated as "no match"
+    /// rather than panicking (per the no-panics-in-production rule).
+    pub fn matches(&self, stream_id: &str) -> bool {
+        match glob::Pattern::new(self.as_ref()) {
+            Ok(pattern) => pattern.matches(stream_id),
+            Err(_) => false,
+        }
+    }
+}
 
 /// Stream version domain type.
 ///
@@ -620,6 +687,52 @@ mod tests {
             result.is_err(),
             "StreamId should reject close bracket glob metacharacter"
         );
+    }
+
+    #[test]
+    fn stream_prefix_rejects_glob_metacharacters() {
+        for raw in ["account-*", "account-?", "account-[", "account-]"] {
+            assert!(
+                StreamPrefix::try_new(raw).is_err(),
+                "StreamPrefix should reject glob metacharacter in {raw:?} (ADR-017)"
+            );
+        }
+    }
+
+    #[test]
+    fn stream_prefix_accepts_literal_prefix() {
+        assert!(StreamPrefix::try_new("account-").is_ok());
+    }
+
+    #[test]
+    fn stream_pattern_rejects_invalid_glob() {
+        // An unclosed character class is not a compilable glob pattern.
+        assert!(
+            StreamPattern::try_new("account-[").is_err(),
+            "StreamPattern should reject an uncompilable glob pattern"
+        );
+    }
+
+    #[test]
+    fn stream_pattern_star_matches_across_separator() {
+        let pattern = StreamPattern::try_new("account-*").expect("valid glob");
+        assert!(pattern.matches("account-1"));
+        assert!(pattern.matches("account-1/sub"));
+        assert!(!pattern.matches("order-1"));
+    }
+
+    #[test]
+    fn stream_pattern_question_mark_matches_single_char() {
+        let pattern = StreamPattern::try_new("account-?").expect("valid glob");
+        assert!(pattern.matches("account-1"));
+        assert!(!pattern.matches("account-12"));
+    }
+
+    #[test]
+    fn stream_pattern_char_class_matches_digit() {
+        let pattern = StreamPattern::try_new("account-[0-9]").expect("valid glob");
+        assert!(pattern.matches("account-7"));
+        assert!(!pattern.matches("account-a"));
     }
 
     #[test]

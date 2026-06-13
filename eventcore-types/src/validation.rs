@@ -12,6 +12,17 @@ pub(crate) fn no_glob_metacharacters(s: &str) -> bool {
     !s.contains(['*', '?', '[', ']'])
 }
 
+/// Validation predicate: accept only strings that compile as a glob pattern.
+///
+/// Per ADR-0047, `StreamPattern` carries a POSIX glob pattern used for
+/// subscription filtering. Parsing the pattern at construction time
+/// (parse-don't-validate) guarantees that an invalid pattern (e.g. an
+/// unclosed character class `account-[`) can never be constructed, so
+/// matching code never has to recover from a compile error.
+pub(crate) fn is_valid_glob_pattern(s: &str) -> bool {
+    glob::Pattern::new(s).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,6 +60,60 @@ mod tests {
                 !no_glob_metacharacters(&s),
                 "String with metacharacter should fail: {:?}",
                 s
+            );
+        });
+    }
+
+    /// Property: Literal strings (no metacharacters) are always valid globs.
+    ///
+    /// A pattern with no glob syntax is a literal match and must always
+    /// compile.
+    #[test]
+    fn literal_strings_are_valid_glob_patterns() {
+        proptest!(|(s in "[^*?\\[\\]]+")| {
+            prop_assert!(
+                is_valid_glob_pattern(&s),
+                "Literal string should be a valid glob pattern: {:?}",
+                s
+            );
+        });
+    }
+
+    /// Property: Strings ending in an unclosed character class are invalid globs.
+    ///
+    /// A `[` that is never closed by a `]` is a syntax error in the `glob`
+    /// crate, so such patterns must be rejected at construction time.
+    #[test]
+    fn unclosed_character_class_is_invalid_glob_pattern() {
+        proptest!(|(prefix in "[a-z]+")| {
+            let pattern = format!("{prefix}[");
+            prop_assert!(
+                !is_valid_glob_pattern(&pattern),
+                "Unclosed character class should be an invalid glob pattern: {:?}",
+                pattern
+            );
+        });
+    }
+
+    /// Property: Common glob wildcards compile successfully.
+    ///
+    /// Patterns combining a literal prefix with `*`, `?`, or a `[0-9]`
+    /// character class are valid POSIX glob syntax and must be accepted.
+    #[test]
+    fn common_wildcard_patterns_are_valid() {
+        let wildcard = prop_oneof![
+            Just("*".to_string()),
+            Just("?".to_string()),
+            Just("[0-9]".to_string()),
+            Just("[a-z]*".to_string()),
+        ];
+
+        proptest!(|(prefix in "[a-z]+", w in wildcard)| {
+            let pattern = format!("{prefix}-{w}");
+            prop_assert!(
+                is_valid_glob_pattern(&pattern),
+                "Common wildcard pattern should be valid: {:?}",
+                pattern
             );
         });
     }

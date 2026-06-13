@@ -293,72 +293,42 @@ impl EventReader for PostgresEventStore {
         // otherwise derive from E::event_type_name().
         let type_filter = filter.event_type().unwrap_or_else(|| E::event_type_name());
 
-        let rows = if let Some(prefix) = filter.stream_prefix() {
-            let prefix_str = prefix.as_ref();
+        // Glob pattern pushdown translates the pattern to an anchored POSIX
+        // regex matched with the `~` operator (ADR-0047). The translation
+        // escapes all regex metacharacters in literal segments so user input
+        // cannot inject regex syntax.
+        let pattern_regex = filter
+            .stream_pattern()
+            .map(|p| glob_to_anchored_regex(p.as_ref()));
 
-            if let Some(after_id) = after_event_id {
-                let query_str = r#"
-                    SELECT event_id, event_data, stream_id
-                    FROM eventcore_events
-                    WHERE event_type = $1
-                      AND event_id > $2
-                      AND stream_id LIKE $3 || '%'
-                    ORDER BY event_id
-                    LIMIT $4
-                "#;
-                query(query_str)
-                    .bind(type_filter)
-                    .bind(after_id)
-                    .bind(prefix_str)
-                    .bind(limit)
-                    .fetch_all(&self.pool)
-                    .await
-            } else {
-                let query_str = r#"
-                    SELECT event_id, event_data, stream_id
-                    FROM eventcore_events
-                    WHERE event_type = $1
-                      AND stream_id LIKE $2 || '%'
-                    ORDER BY event_id
-                    LIMIT $3
-                "#;
-                query(query_str)
-                    .bind(type_filter)
-                    .bind(prefix_str)
-                    .bind(limit)
-                    .fetch_all(&self.pool)
-                    .await
-            }
-        } else if let Some(after_id) = after_event_id {
-            let query_str = r#"
-                SELECT event_id, event_data, stream_id
-                FROM eventcore_events
-                WHERE event_type = $1
-                  AND event_id > $2
-                ORDER BY event_id
-                LIMIT $3
-            "#;
-            query(query_str)
-                .bind(type_filter)
-                .bind(after_id)
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await
-        } else {
-            let query_str = r#"
-                SELECT event_id, event_data, stream_id
-                FROM eventcore_events
-                WHERE event_type = $1
-                ORDER BY event_id
-                LIMIT $2
-            "#;
-            query(query_str)
-                .bind(type_filter)
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await
+        // Build the query dynamically so prefix XOR pattern, the optional
+        // cursor, and the event_type predicate compose without a combinatorial
+        // explosion of hand-written query strings.
+        let mut builder = QueryBuilder::<Postgres>::new(
+            "SELECT event_id, event_data, stream_id FROM eventcore_events WHERE event_type = ",
+        );
+        let _ = builder.push_bind(type_filter);
+
+        if let Some(after_id) = after_event_id {
+            let _ = builder.push(" AND event_id > ").push_bind(after_id);
         }
-        .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+
+        if let Some(prefix) = filter.stream_prefix() {
+            let _ = builder
+                .push(" AND stream_id LIKE ")
+                .push_bind(prefix.as_ref().to_string())
+                .push(" || '%'");
+        } else if let Some(regex) = pattern_regex {
+            let _ = builder.push(" AND stream_id ~ ").push_bind(regex);
+        }
+
+        let _ = builder.push(" ORDER BY event_id LIMIT ").push_bind(limit);
+
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
 
         let events: Vec<(E, StreamPosition)> = rows
             .into_iter()
@@ -373,6 +343,80 @@ impl EventReader for PostgresEventStore {
 
         Ok(events)
     }
+}
+
+/// Translate a POSIX glob pattern into an anchored POSIX regular expression
+/// suitable for PostgreSQL's `~` operator (ADR-0047).
+///
+/// Mapping:
+/// - `*` → `.*` (matches any sequence, including the `/` separator)
+/// - `?` → `.` (matches exactly one character)
+/// - `[...]` / `[!...]` → a regex character class (`[!` is normalized to the
+///   regex negation `[^`); the class contents are copied verbatim so ranges
+///   like `[0-9]` and `[a-z]` work, while a closing `]` ends the class
+/// - every other character is a literal and is regex-escaped
+///
+/// The result is anchored with `^...$` so the whole stream ID must match,
+/// mirroring `glob::Pattern::matches`. Because the pattern has already been
+/// validated as a compilable `glob::Pattern`, brackets are balanced; a stray
+/// `[` (impossible for a valid pattern) is treated as a literal.
+fn glob_to_anchored_regex(glob: &str) -> String {
+    let mut regex = String::with_capacity(glob.len() + 2);
+    regex.push('^');
+
+    let mut chars = glob.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => regex.push_str(".*"),
+            '?' => regex.push('.'),
+            '[' => {
+                // Collect the bracket expression up to the closing ']'.
+                let mut class = String::new();
+                let mut closed = false;
+                if matches!(chars.peek(), Some('!')) {
+                    let _ = chars.next();
+                    class.push('^');
+                }
+                for inner in chars.by_ref() {
+                    if inner == ']' {
+                        closed = true;
+                        break;
+                    }
+                    class.push(inner);
+                }
+                if closed {
+                    regex.push('[');
+                    regex.push_str(&class);
+                    regex.push(']');
+                } else {
+                    // Not a real class (a validated glob never reaches here);
+                    // treat the '[' and collected chars as literals.
+                    regex.push_str(&regex_escape("["));
+                    regex.push_str(&regex_escape(&class));
+                }
+            }
+            other => regex.push_str(&regex_escape(&other.to_string())),
+        }
+    }
+
+    regex.push('$');
+    regex
+}
+
+/// Escape every POSIX-regex metacharacter in a literal segment so it matches
+/// itself, preventing regex injection from stream-pattern input.
+fn regex_escape(literal: &str) -> String {
+    const METACHARACTERS: &[char] = &[
+        '.', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '\\',
+    ];
+    let mut escaped = String::with_capacity(literal.len());
+    for c in literal.chars() {
+        if METACHARACTERS.contains(&c) {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
 }
 
 fn map_sqlx_error(error: sqlx::Error, operation: Operation) -> EventStoreError {
@@ -778,5 +822,49 @@ impl ProjectorCoordinator for PostgresEventStore {
 
     async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
         try_acquire_advisory_lock(&self.pool, subscription_name).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{glob_to_anchored_regex, regex_escape};
+
+    #[test]
+    fn star_translates_to_dot_star_anchored() {
+        // '-' is not a regex metacharacter outside a class, so it stays literal.
+        assert_eq!(glob_to_anchored_regex("account-*"), "^account-.*$");
+    }
+
+    #[test]
+    fn question_mark_translates_to_dot() {
+        assert_eq!(glob_to_anchored_regex("account-?"), "^account-.$");
+    }
+
+    #[test]
+    fn character_class_is_preserved() {
+        assert_eq!(
+            glob_to_anchored_regex("account-[0-9]*"),
+            "^account-[0-9].*$"
+        );
+    }
+
+    #[test]
+    fn negated_character_class_uses_caret() {
+        assert_eq!(glob_to_anchored_regex("account-[!0-9]"), "^account-[^0-9]$");
+    }
+
+    #[test]
+    fn literal_regex_metacharacters_are_escaped() {
+        // A literal '.' in the glob must not become a regex wildcard, and other
+        // regex metacharacters must be escaped to prevent injection.
+        assert_eq!(glob_to_anchored_regex("a.c+(d)"), "^a\\.c\\+\\(d\\)$");
+    }
+
+    #[test]
+    fn regex_escape_escapes_all_metacharacters() {
+        assert_eq!(
+            regex_escape(".^$*+?()[]{}|\\"),
+            "\\.\\^\\$\\*\\+\\?\\(\\)\\[\\]\\{\\}\\|\\\\"
+        );
     }
 }

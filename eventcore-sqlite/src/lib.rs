@@ -498,6 +498,8 @@ impl EventReader for SqliteEventStore {
             page.after_position().map(|p| p.into_inner().to_string());
         let limit = page.limit().into_inner() as i64;
         let prefix = filter.stream_prefix().map(|p| p.as_ref().to_string());
+        // Glob pattern pushdown uses SQLite's native GLOB operator (ADR-0047).
+        let pattern = filter.stream_pattern().map(|p| p.as_ref().to_string());
         let type_filter = filter
             .event_type()
             .unwrap_or_else(|| E::event_type_name())
@@ -506,58 +508,40 @@ impl EventReader for SqliteEventStore {
         let rows = tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
 
-            let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-                match (&prefix, &after_event_id) {
-                    // UUIDv7 event IDs sort lexicographically in chronological order,
-                    // so text comparison (`event_id > ?1`) preserves insertion order
-                    // for cursor-based pagination.
-                    (Some(pfx), Some(after_id)) => {
-                        let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-                            Box::new(after_id.clone()),
-                            Box::new(format!("{}%", pfx)),
-                            Box::new(type_filter.clone()),
-                            Box::new(limit),
-                        ];
-                        (
-                            "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 AND stream_id LIKE ?2 AND event_type = ?3 ORDER BY event_id LIMIT ?4"
-                                .to_string(),
-                            params,
-                        )
-                    }
-                    (Some(pfx), None) => {
-                        let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-                            Box::new(format!("{}%", pfx)),
-                            Box::new(type_filter.clone()),
-                            Box::new(limit),
-                        ];
-                        (
-                            "SELECT event_id, event_data FROM eventcore_events WHERE stream_id LIKE ?1 AND event_type = ?2 ORDER BY event_id LIMIT ?3"
-                                .to_string(),
-                            params,
-                        )
-                    }
-                    (None, Some(after_id)) => {
-                        let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-                            Box::new(after_id.clone()),
-                            Box::new(type_filter.clone()),
-                            Box::new(limit),
-                        ];
-                        (
-                            "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 AND event_type = ?2 ORDER BY event_id LIMIT ?3"
-                                .to_string(),
-                            params,
-                        )
-                    }
-                    (None, None) => {
-                        let params: Vec<Box<dyn rusqlite::types::ToSql>> =
-                            vec![Box::new(type_filter.clone()), Box::new(limit)];
-                        (
-                            "SELECT event_id, event_data FROM eventcore_events WHERE event_type = ?1 ORDER BY event_id LIMIT ?2"
-                                .to_string(),
-                            params,
-                        )
-                    }
-                };
+            // Build the WHERE clause dynamically so prefix XOR pattern, the
+            // optional cursor, and the event_type predicate compose without a
+            // combinatorial explosion of hand-written query strings. Bound
+            // values are appended in the same order the placeholders are
+            // emitted. UUIDv7 event IDs sort lexicographically in chronological
+            // order, so text comparison (`event_id > ?`) preserves insertion
+            // order for cursor-based pagination.
+            let mut conditions: Vec<String> = Vec::new();
+            let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+            if let Some(after_id) = &after_event_id {
+                conditions.push(format!("event_id > ?{}", param_values.len() + 1));
+                param_values.push(Box::new(after_id.clone()));
+            }
+
+            if let Some(pfx) = &prefix {
+                conditions.push(format!("stream_id LIKE ?{}", param_values.len() + 1));
+                param_values.push(Box::new(format!("{}%", pfx)));
+            } else if let Some(pat) = &pattern {
+                conditions.push(format!("stream_id GLOB ?{}", param_values.len() + 1));
+                param_values.push(Box::new(pat.clone()));
+            }
+
+            conditions.push(format!("event_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(type_filter.clone()));
+
+            let limit_placeholder = format!("?{}", param_values.len() + 1);
+            param_values.push(Box::new(limit));
+
+            let sql = format!(
+                "SELECT event_id, event_data FROM eventcore_events WHERE {} ORDER BY event_id LIMIT {}",
+                conditions.join(" AND "),
+                limit_placeholder,
+            );
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> =
                 param_values.iter().map(|p| p.as_ref()).collect();
