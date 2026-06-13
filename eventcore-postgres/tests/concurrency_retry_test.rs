@@ -2,7 +2,9 @@ mod common;
 
 use std::sync::Arc;
 
-use eventcore_types::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{
+    Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites, collect_events,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Barrier;
 use uuid::Uuid;
@@ -102,10 +104,14 @@ async fn developer_retries_after_postgres_version_conflict() {
 
     // Then: Exactly one write succeeds initially, the other reports conflict, retry succeeds, two events persist, and instrumentation logs conflict
     let read_result = store.read_stream::<TestEvent>(stream_id.clone()).await;
-    let total_events = read_result
-        .as_ref()
-        .map(|reader| reader.len())
-        .unwrap_or_default();
+    let read_succeeded = read_result.is_ok();
+    let total_events = match read_result {
+        Ok(stream) => collect_events(stream)
+            .await
+            .map(|events: Vec<TestEvent>| events.len())
+            .unwrap_or_default(),
+        Err(_) => 0,
+    };
     let logs_contain_conflict = logs_contain("postgres.version_conflict");
     let retry_succeeded = retry_result.is_ok();
     let retry_state = match &retry_result {
@@ -117,7 +123,7 @@ async fn developer_retries_after_postgres_version_conflict() {
         success_count == 1
             && conflict_count == 1
             && retry_succeeded
-            && read_result.is_ok()
+            && read_succeeded
             && total_events == 2
             && logs_contain_conflict,
         "postgres store should surface version conflict, allow retry, persist events, and emit instrumentation; success_count={success_count}, conflict_count={conflict_count}, retry_state={retry_state}, total_events={total_events}, logs_contain_conflict={logs_contain_conflict}",

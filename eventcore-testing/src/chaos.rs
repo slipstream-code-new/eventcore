@@ -1,7 +1,7 @@
 use std::{future::Future, sync::Mutex};
 
 use eventcore_types::{
-    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
+    Event, EventStore, EventStoreError, EventStream, EventStreamSlice, Operation, StreamId,
     StreamVersion, StreamWrites,
 };
 use nutype::nutype;
@@ -147,7 +147,7 @@ where
     fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> impl Future<Output = Result<EventStreamReader<E>, EventStoreError>> + Send {
+    ) -> impl Future<Output = Result<EventStream<E>, EventStoreError>> + Send {
         let should_fail = self.should_inject(self.config.failure_probability);
         let store = &self.store;
 

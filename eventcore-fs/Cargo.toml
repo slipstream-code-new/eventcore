@@ -21,6 +21,7 @@ uuid = { version = "1.23.1", features = ["v7", "serde"] }
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 nutype = { version = "0.7.0", features = ["serde"] }
 sha2 = "0.10"
+futures = "0.3.32"
 
 [dev-dependencies]
 eventcore-testing = { path = "../eventcore-testing" }

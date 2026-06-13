@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 
 use eventcore_fs::{FileEventStore, ResolutionOutcome};
-use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites, collect_events};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
@@ -66,11 +66,12 @@ fn union_events(src: &Path, dst: &Path) {
 /// now tracks per-replica local-ingestion order (ADR-0043(c)) and therefore
 /// legitimately differs between clones.
 async fn canonical_texts(store: &FileEventStore, stream: &StreamId) -> Vec<String> {
-    let reader = store
+    let event_stream = store
         .read_stream::<Note>(stream.clone())
         .await
         .expect("read_stream");
-    reader.iter().map(|note| note.text.clone()).collect()
+    let notes: Vec<Note> = collect_events(event_stream).await.expect("collect");
+    notes.iter().map(|note| note.text.clone()).collect()
 }
 
 async fn canonical_order(root: &Path, stream: &StreamId) -> Vec<String> {
@@ -252,12 +253,13 @@ async fn reconcile_collapses_fork_and_converges() {
         "the fork is resolved by the merge transaction"
     );
 
-    let reader = store
+    let event_stream = store
         .read_stream::<Note>(account.clone())
         .await
         .expect("read stream");
-    assert_eq!(reader.len(), 4, "ancestor + both branches + resolution");
-    let stream_texts: Vec<String> = reader.iter().map(|note| note.text.clone()).collect();
+    let notes: Vec<Note> = collect_events(event_stream).await.expect("collect");
+    assert_eq!(notes.len(), 4, "ancestor + both branches + resolution");
+    let stream_texts: Vec<String> = notes.iter().map(|note| note.text.clone()).collect();
     assert_eq!(stream_texts[0], "opened");
     assert!(
         stream_texts[3].starts_with("merged:"),

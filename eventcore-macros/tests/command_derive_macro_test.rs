@@ -1,6 +1,6 @@
 use eventcore::{
     Command, CommandError, CommandLogic, CommandStreams, Event, NewEvents, RetryPolicy,
-    StreamDeclarations, StreamId, execute,
+    StreamDeclarations, StreamId, collect_events, execute,
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_types::EventStore;
@@ -185,35 +185,43 @@ async fn migrating_from_manual_impl_preserves_behavior() {
     );
 
     // And Then: derived macro writes the same externally-observable events as the manual command
-    let manual_source_events = manual_store
-        .read_stream::<TransferEvent>(source_account.clone())
-        .await
-        .expect("reading manual source stream should succeed")
-        .into_iter()
-        .collect::<Vec<_>>();
-    let derived_source_events = derived_store
-        .read_stream::<TransferEvent>(source_account.clone())
-        .await
-        .expect("reading derived source stream should succeed")
-        .into_iter()
-        .collect::<Vec<_>>();
+    let manual_source_events = collect_events(
+        manual_store
+            .read_stream::<TransferEvent>(source_account.clone())
+            .await
+            .expect("reading manual source stream should succeed"),
+    )
+    .await
+    .expect("collecting manual source events");
+    let derived_source_events = collect_events(
+        derived_store
+            .read_stream::<TransferEvent>(source_account.clone())
+            .await
+            .expect("reading derived source stream should succeed"),
+    )
+    .await
+    .expect("collecting derived source events");
     assert_eq!(
         manual_source_events, derived_source_events,
         "source stream should observe identical debits after migration",
     );
 
-    let manual_destination_events = manual_store
-        .read_stream::<TransferEvent>(destination_account.clone())
-        .await
-        .expect("reading manual destination stream should succeed")
-        .into_iter()
-        .collect::<Vec<_>>();
-    let derived_destination_events = derived_store
-        .read_stream::<TransferEvent>(destination_account.clone())
-        .await
-        .expect("reading derived destination stream should succeed")
-        .into_iter()
-        .collect::<Vec<_>>();
+    let manual_destination_events = collect_events(
+        manual_store
+            .read_stream::<TransferEvent>(destination_account.clone())
+            .await
+            .expect("reading manual destination stream should succeed"),
+    )
+    .await
+    .expect("collecting manual destination events");
+    let derived_destination_events = collect_events(
+        derived_store
+            .read_stream::<TransferEvent>(destination_account.clone())
+            .await
+            .expect("reading derived destination stream should succeed"),
+    )
+    .await
+    .expect("collecting derived destination events");
     assert_eq!(
         manual_destination_events, derived_destination_events,
         "destination stream should observe identical credits after migration",

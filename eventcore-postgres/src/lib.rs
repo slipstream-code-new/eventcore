@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use eventcore_types::{
     CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
+    EventStream, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
     StreamVersion, StreamWrites,
 };
+use futures::StreamExt;
 use nutype::nutype;
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
@@ -127,35 +128,60 @@ impl EventStore for PostgresEventStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         info!(
             stream = %stream_id,
             "[postgres.read_stream] reading events from postgres"
         );
 
-        let rows = query(
-            "SELECT event_data FROM eventcore_events WHERE stream_id = $1 ORDER BY stream_version ASC",
-        )
-        .bind(stream_id.as_ref())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+        // Clone the pool (an `Arc` internally) so the returned stream owns its
+        // connection handle and can be `'static`. The query uses sqlx's lazy
+        // `fetch`, which pulls rows from the database incrementally rather than
+        // buffering the entire result set with `fetch_all` — the real memory
+        // win behind #364 for large streams.
+        let pool = self.pool.clone();
 
-        let mut events = Vec::with_capacity(rows.len());
-        for row in rows {
-            let payload: Value = row
-                .try_get("event_data")
-                .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
-            let event = serde_json::from_value(payload).map_err(|error| {
-                EventStoreError::DeserializationFailed {
-                    stream_id: stream_id.clone(),
-                    detail: error.to_string(),
+        let stream = async_stream::stream! {
+            let mut rows = query(
+                "SELECT event_data FROM eventcore_events WHERE stream_id = $1 ORDER BY stream_version ASC",
+            )
+            .bind(stream_id.as_ref())
+            .fetch(&pool);
+
+            while let Some(row) = rows.next().await {
+                let row = match row {
+                    Ok(row) => row,
+                    Err(error) => {
+                        yield Err(map_sqlx_error(error, Operation::ReadStream));
+                        break;
+                    }
+                };
+
+                let payload: Value = match row.try_get("event_data") {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        yield Err(map_sqlx_error(error, Operation::ReadStream));
+                        break;
+                    }
+                };
+
+                // A per-row decode failure surfaces as an `Err` item, matching
+                // the previous behavior where a type mismatch failed the read
+                // (see the read_stream_errors_on_type_mismatch contract test).
+                match serde_json::from_value::<E>(payload) {
+                    Ok(event) => yield Ok(event),
+                    Err(error) => {
+                        yield Err(EventStoreError::DeserializationFailed {
+                            stream_id: stream_id.clone(),
+                            detail: error.to_string(),
+                        });
+                        break;
+                    }
                 }
-            })?;
-            events.push(event);
-        }
+            }
+        };
 
-        Ok(EventStreamReader::new(events))
+        Ok(EventStream::new(stream))
     }
 
     #[instrument(name = "postgres.append_events", skip(self, writes))]

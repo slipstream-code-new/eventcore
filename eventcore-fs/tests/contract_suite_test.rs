@@ -9,7 +9,7 @@ mod fs_contract_suite {
     use eventcore_testing::contract::backend_contract_tests;
     use eventcore_types::{
         CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-        EventStreamReader, EventStreamSlice, ProjectorCoordinator, StreamId, StreamPosition,
+        EventStream, EventStreamSlice, ProjectorCoordinator, StreamId, StreamPosition,
         StreamWrites,
     };
     use tempfile::TempDir;
@@ -23,7 +23,7 @@ mod fs_contract_suite {
         async fn read_stream<E: Event>(
             &self,
             stream_id: StreamId,
-        ) -> Result<EventStreamReader<E>, EventStoreError> {
+        ) -> Result<EventStream<E>, EventStoreError> {
             self.inner.read_stream(stream_id).await
         }
 

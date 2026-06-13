@@ -1,6 +1,6 @@
 mod common;
 
-use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites, collect_events};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -48,10 +48,13 @@ async fn developer_observes_postgres_tracing_spans() {
         .expect("postgres store should append events for observability test");
 
     // When: Developer reads the stream to exercise read spans
-    let _events = store
+    let stream = store
         .read_stream::<TestEvent>(stream_id.clone())
         .await
         .expect("postgres store should read stream for observability test");
+    let _events: Vec<TestEvent> = collect_events(stream)
+        .await
+        .expect("postgres store should collect events for observability test");
 
     // Then: Tracing spans are emitted for both append and read operations
     assert!(

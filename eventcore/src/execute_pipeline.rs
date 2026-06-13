@@ -9,6 +9,10 @@ use crate::{ExecutionResponse, RetryPolicy};
 pub(crate) enum PipelineStep {
     /// The pipeline needs an I/O effect dispatched before it can continue.
     Yield(StoreEffect),
+    /// The pipeline consumed a `resume()` result and is ready for the next one
+    /// without dispatching a new effect. Used while a stream is being drained:
+    /// after each `StreamEvent` is folded, the shell pulls the next item.
+    WaitForResult,
     /// The pipeline has completed with a final outcome.
     Done(PipelineOutcome),
 }
@@ -17,6 +21,7 @@ impl std::fmt::Debug for PipelineStep {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Yield(effect) => f.debug_tuple("Yield").field(effect).finish(),
+            Self::WaitForResult => f.write_str("WaitForResult"),
             Self::Done(outcome) => f.debug_tuple("Done").field(outcome).finish(),
         }
     }
@@ -71,7 +76,13 @@ enum Phase<C: CommandLogic> {
         expected_versions: HashMap<StreamId, StreamVersion>,
         state: C::State,
     },
-    /// Waiting for a stream read result.
+    /// Folding events from the current stream as they arrive.
+    ///
+    /// The shell pushes one `StreamEvent` at a time; each is folded into
+    /// `state` and `event_count` is incremented. The phase is re-entered after
+    /// every event and only advances when the stream terminates. `event_count`
+    /// becomes the stream's expected version (equivalent to the old
+    /// `reader.len()`).
     AwaitingStreamRead {
         current_stream: StreamId,
         queue: VecDeque<StreamId>,
@@ -80,6 +91,7 @@ enum Phase<C: CommandLogic> {
         stream_ids: Vec<StreamId>,
         expected_versions: HashMap<StreamId, StreamVersion>,
         state: C::State,
+        event_count: usize,
     },
     /// All streams read; call handle() and build writes.
     Handling {
@@ -155,6 +167,7 @@ impl<C: CommandLogic> ExecutePipeline<C> {
                             stream_ids,
                             expected_versions,
                             state,
+                            event_count: 0,
                         };
                         return PipelineStep::Yield(StoreEffect::ReadStream { stream_id });
                     }
@@ -221,42 +234,61 @@ impl<C: CommandLogic> ExecutePipeline<C> {
                 mut stream_ids,
                 mut expected_versions,
                 mut state,
+                mut event_count,
             } => {
-                let reader = match result {
-                    StoreEffectResult::StreamRead(Ok(reader)) => reader,
-                    StoreEffectResult::StreamRead(Err(e)) => {
-                        return PipelineStep::Done(PipelineOutcome::Error(
-                            CommandError::EventStoreError(e),
-                        ));
+                match result {
+                    // Fold a single streamed event into state and wait for the
+                    // next item. The whole stream is never buffered in the shell
+                    // or the pipeline — only the in-progress `state` is kept.
+                    StoreEffectResult::StreamEvent(event) => {
+                        state = self.command.apply(state, &event);
+                        event_count += 1;
+                        self.phase = Phase::AwaitingStreamRead {
+                            current_stream,
+                            queue,
+                            visited,
+                            scheduled,
+                            stream_ids,
+                            expected_versions,
+                            state,
+                            event_count,
+                        };
+                        PipelineStep::WaitForResult
                     }
-                    _ => panic!("expected StreamRead result"),
-                };
 
-                let expected_version = StreamVersion::new(reader.len());
-                let _ = expected_versions.insert(current_stream.clone(), expected_version);
-                state = reader
-                    .into_iter()
-                    .fold(state, |acc, event| self.command.apply(acc, &event));
-                stream_ids.push(current_stream);
+                    // Stream fully consumed: the number of folded events is the
+                    // stream's expected version (the old `reader.len()`).
+                    StoreEffectResult::StreamEnded => {
+                        let expected_version = StreamVersion::new(event_count);
+                        let _ = expected_versions.insert(current_stream.clone(), expected_version);
+                        stream_ids.push(current_stream);
 
-                // Dynamic stream discovery
-                if let Some(resolver) = self.command.stream_resolver() {
-                    for related_stream in resolver.discover_related_streams(&state) {
-                        if scheduled.insert(related_stream.clone()) {
-                            queue.push_back(related_stream);
+                        // Dynamic stream discovery
+                        if let Some(resolver) = self.command.stream_resolver() {
+                            for related_stream in resolver.discover_related_streams(&state) {
+                                if scheduled.insert(related_stream.clone()) {
+                                    queue.push_back(related_stream);
+                                }
+                            }
                         }
-                    }
-                }
 
-                self.phase = Phase::ReadingStreams {
-                    queue,
-                    visited,
-                    scheduled,
-                    stream_ids,
-                    expected_versions,
-                    state,
-                };
-                self.step()
+                        self.phase = Phase::ReadingStreams {
+                            queue,
+                            visited,
+                            scheduled,
+                            stream_ids,
+                            expected_versions,
+                            state,
+                        };
+                        self.step()
+                    }
+
+                    StoreEffectResult::StreamReadError(e) => {
+                        PipelineStep::Done(PipelineOutcome::Error(CommandError::EventStoreError(e)))
+                    }
+
+                    _ => panic!("expected a stream read result"),
+                }
             }
 
             Phase::AwaitingAppend { stream_ids } => {
@@ -339,9 +371,7 @@ impl<C: CommandLogic> ExecutePipeline<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore_types::{
-        CommandStreams, Event, EventStreamReader, NewEvents, StreamDeclarations,
-    };
+    use eventcore_types::{CommandStreams, Event, NewEvents, StreamDeclarations};
     use serde::{Deserialize, Serialize};
 
     // --- Test fixtures ---
@@ -391,8 +421,13 @@ mod tests {
         StreamId::try_new("test/stream-1").expect("valid stream id")
     }
 
-    fn empty_reader() -> EventStreamReader<TestEvent> {
-        EventStreamReader::new(vec![])
+    /// Drive an empty stream through the pipeline: resume immediately with
+    /// `StreamEnded` (zero `StreamEvent` pushes), mirroring the shell pumping
+    /// an empty stream.
+    fn resume_empty_stream(
+        pipeline: &mut ExecutePipeline<impl CommandLogic<Event = TestEvent>>,
+    ) -> PipelineStep {
+        pipeline.resume(StoreEffectResult::StreamEnded)
     }
 
     // --- Tests ---
@@ -412,7 +447,7 @@ mod tests {
         );
 
         // Resume with empty stream
-        let step = pipeline.resume(StoreEffectResult::StreamRead(Ok(empty_reader())));
+        let step = resume_empty_stream(&mut pipeline);
 
         // Step 2: should yield AppendEvents
         assert!(matches!(
@@ -442,7 +477,7 @@ mod tests {
 
         // First attempt: read → append → conflict
         let _read = pipeline.step();
-        let _append = pipeline.resume(StoreEffectResult::StreamRead(Ok(empty_reader())));
+        let _append = resume_empty_stream(&mut pipeline);
         let step = pipeline.resume(StoreEffectResult::EventsAppended(Err(
             EventStoreError::VersionConflict {
                 stream_id: StreamId::try_new("test-conflict").expect("valid stream id"),
@@ -464,7 +499,7 @@ mod tests {
         );
 
         // Complete second attempt successfully
-        let _append = pipeline.resume(StoreEffectResult::StreamRead(Ok(empty_reader())));
+        let _append = resume_empty_stream(&mut pipeline);
         let step = pipeline.resume(StoreEffectResult::EventsAppended(Ok(
             eventcore_types::EventStreamSlice,
         )));
@@ -510,7 +545,7 @@ mod tests {
 
         // Read stream
         let _read = pipeline.step();
-        let step = pipeline.resume(StoreEffectResult::StreamRead(Ok(empty_reader())));
+        let step = resume_empty_stream(&mut pipeline);
 
         // Should be done with error (no append attempt)
         assert!(matches!(
@@ -518,6 +553,98 @@ mod tests {
             PipelineStep::Done(PipelineOutcome::Error(CommandError::BusinessRuleViolation(
                 _
             )))
+        ));
+    }
+
+    /// Command whose state counts how many events were folded, so a test can
+    /// prove the pipeline folds each pushed `StreamEvent` incrementally.
+    struct CountingCommand {
+        stream_id: StreamId,
+        observed: std::sync::Arc<std::sync::Mutex<usize>>,
+    }
+
+    impl CommandStreams for CountingCommand {
+        fn stream_declarations(&self) -> StreamDeclarations {
+            StreamDeclarations::try_from_streams(vec![self.stream_id.clone()])
+                .expect("single stream")
+        }
+    }
+
+    impl CommandLogic for CountingCommand {
+        type Event = TestEvent;
+        type State = usize;
+
+        fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
+            state + 1
+        }
+
+        fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+            *self.observed.lock().expect("lock") = state;
+            Ok(vec![TestEvent {
+                stream_id: self.stream_id.clone(),
+            }]
+            .into())
+        }
+    }
+
+    #[test]
+    fn pipeline_folds_each_streamed_event_incrementally() {
+        let stream_id = test_stream_id();
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+        let command = CountingCommand {
+            stream_id: stream_id.clone(),
+            observed: observed.clone(),
+        };
+        let mut pipeline = ExecutePipeline::new(command, RetryPolicy::default());
+
+        // Yields ReadStream
+        let _read = pipeline.step();
+
+        // Push three events one at a time; each should fold and wait for more.
+        for _ in 0..3 {
+            let step = pipeline.resume(StoreEffectResult::StreamEvent(TestEvent {
+                stream_id: stream_id.clone(),
+            }));
+            assert!(matches!(step, PipelineStep::WaitForResult));
+        }
+
+        // End of stream → handle() runs with the folded state, then append.
+        let step = pipeline.resume(StoreEffectResult::StreamEnded);
+        assert!(matches!(
+            &step,
+            PipelineStep::Yield(StoreEffect::AppendEvents { .. })
+        ));
+
+        // handle() observed all three folded events.
+        assert_eq!(*observed.lock().expect("lock"), 3);
+    }
+
+    #[test]
+    fn pipeline_propagates_per_event_stream_error() {
+        let stream_id = test_stream_id();
+        let command = SuccessCommand {
+            stream_id: stream_id.clone(),
+        };
+        let mut pipeline = ExecutePipeline::new(command, RetryPolicy::default());
+
+        let _read = pipeline.step();
+
+        // First event folds, then a per-event decode error terminates the read.
+        let step = pipeline.resume(StoreEffectResult::StreamEvent(TestEvent {
+            stream_id: stream_id.clone(),
+        }));
+        assert!(matches!(step, PipelineStep::WaitForResult));
+
+        let step = pipeline.resume(StoreEffectResult::StreamReadError(
+            EventStoreError::DeserializationFailed {
+                stream_id,
+                detail: "bad event".to_string(),
+            },
+        ));
+
+        assert!(matches!(
+            step,
+            PipelineStep::Done(PipelineOutcome::Error(CommandError::EventStoreError(_)))
         ));
     }
 }

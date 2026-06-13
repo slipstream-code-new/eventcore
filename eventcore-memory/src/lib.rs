@@ -8,7 +8,7 @@ use std::sync::{Arc, RwLock};
 
 use eventcore_types::{
     CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
+    EventStream, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
     StreamVersion, StreamWriteEntry, StreamWrites,
 };
 use uuid::Uuid;
@@ -96,36 +96,40 @@ impl EventStore for InMemoryEventStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let data = self
-            .data
-            .lock()
-            .map_err(|_| EventStoreError::StoreFailure {
-                operation: Operation::ReadStream,
-            })?;
-        let events = match data.streams.get(&stream_id) {
-            None => Vec::new(),
-            Some((boxed_events, _version)) => {
-                let mut events = Vec::with_capacity(boxed_events.len());
-                for boxed in boxed_events {
-                    match boxed.downcast_ref::<E>() {
-                        Some(event) => events.push(event.clone()),
-                        None => {
-                            return Err(EventStoreError::DeserializationFailed {
-                                stream_id,
-                                detail: format!(
-                                    "event could not be downcast to {}",
-                                    std::any::type_name::<E>()
-                                ),
-                            });
-                        }
-                    }
-                }
-                events
+    ) -> Result<EventStream<E>, EventStoreError> {
+        // The in-memory store keeps events behind a lock as type-erased
+        // `Box<dyn Any>`. Producing an owned `E` per item requires a downcast
+        // and clone (expected — see #363), so we materialize the per-event
+        // results while holding the lock, then release it and yield the items
+        // one at a time. The stream is still consumed incrementally by the
+        // executor; only this local, in-process backend buffers the owned
+        // clones (which already existed in memory).
+        let items: Vec<Result<E, EventStoreError>> = {
+            let data = self
+                .data
+                .lock()
+                .map_err(|_| EventStoreError::StoreFailure {
+                    operation: Operation::ReadStream,
+                })?;
+            match data.streams.get(&stream_id) {
+                None => Vec::new(),
+                Some((boxed_events, _version)) => boxed_events
+                    .iter()
+                    .map(|boxed| match boxed.downcast_ref::<E>() {
+                        Some(event) => Ok(event.clone()),
+                        None => Err(EventStoreError::DeserializationFailed {
+                            stream_id: stream_id.clone(),
+                            detail: format!(
+                                "event could not be downcast to {}",
+                                std::any::type_name::<E>()
+                            ),
+                        }),
+                    })
+                    .collect(),
             }
         };
 
-        Ok(EventStreamReader::new(events))
+        Ok(EventStream::new(futures::stream::iter(items)))
     }
 
     async fn append_events(
@@ -449,6 +453,7 @@ impl CheckpointStore for InMemoryCheckpointStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eventcore_types::collect_events;
     use eventcore_types::{BatchSize, EventFilter, EventPage};
     use serde::{Deserialize, Serialize};
 
@@ -505,18 +510,15 @@ mod tests {
             .await
             .expect("append to succeed");
 
-        let reader = store
+        let stream = store
             .read_stream::<TestEvent>(stream_id)
             .await
             .expect("read to succeed");
+        let events = collect_events(stream).await.expect("collect to succeed");
 
-        let observed = (
-            reader.is_empty(),
-            reader.len(),
-            reader.iter().next().is_none(),
-        );
+        let observed = (events.is_empty(), events.len());
 
-        assert_eq!(observed, (false, 1usize, false));
+        assert_eq!(observed, (false, 1usize));
     }
 
     #[tokio::test]
@@ -525,10 +527,13 @@ mod tests {
         let stream_id =
             StreamId::try_new("is-empty-observation".to_string()).expect("valid stream id");
 
-        let initial_reader = store
+        let initial_stream = store
             .read_stream::<TestEvent>(stream_id.clone())
             .await
             .expect("initial read to succeed");
+        let initial_events = collect_events(initial_stream)
+            .await
+            .expect("collect to succeed");
 
         let event = TestEvent {
             stream_id: stream_id.clone(),
@@ -545,16 +550,19 @@ mod tests {
             .await
             .expect("append to succeed");
 
-        let populated_reader = store
+        let populated_stream = store
             .read_stream::<TestEvent>(stream_id)
             .await
             .expect("populated read to succeed");
+        let populated_events = collect_events(populated_stream)
+            .await
+            .expect("collect to succeed");
 
         let observed = (
-            initial_reader.is_empty(),
-            initial_reader.len(),
-            populated_reader.is_empty(),
-            populated_reader.len(),
+            initial_events.is_empty(),
+            initial_events.len(),
+            populated_events.is_empty(),
+            populated_events.len(),
         );
 
         assert_eq!(observed, (true, 0usize, false, 1usize));
@@ -586,14 +594,15 @@ mod tests {
             .await
             .expect("append to succeed");
 
-        let reader = store
+        let stream = store
             .read_stream::<TestEvent>(stream_id)
             .await
             .expect("read to succeed");
+        let events = collect_events(stream).await.expect("collect to succeed");
 
-        let collected: Vec<String> = reader.iter().map(|event| event.data.clone()).collect();
+        let collected: Vec<String> = events.iter().map(|event| event.data.clone()).collect();
 
-        let observed = (reader.is_empty(), collected);
+        let observed = (events.is_empty(), collected);
 
         assert_eq!(
             observed,

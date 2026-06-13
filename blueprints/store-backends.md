@@ -22,6 +22,26 @@ Each backend implements `EventStore`, `EventReader`, `CheckpointStore`, and `Pro
 
 The file backend additionally exposes a **merge mode** — fork detection and domain-owned reconciliation of histories combined via `git merge` — as file-store-specific API _outside_ the shared traits (ADR-0045). See the [fs-merge-mode](fs-merge-mode.md) blueprint.
 
+## Streaming Reads (ADR-0049)
+
+`EventStore::read_stream` returns `Result<EventStream<E>, EventStoreError>`,
+where `EventStream<E>` is an async stream yielding `Result<E, EventStoreError>`
+per event in stream-version order. Opening may fail up front; per-event decode
+failures surface as `Err` items. The executor folds events incrementally as
+they arrive rather than collecting the whole stream. `collect_events(stream)`
+is the helper for callers that want a `Vec`.
+
+Per-backend streaming behavior:
+
+| Backend    | Read strategy                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL | Lazy `sqlx` `query(...).fetch(&pool)` over a cloned pool — rows pulled incrementally (real win)                                          |
+| SQLite     | `spawn_blocking` reads rows and sends them over a bounded `tokio::sync::mpsc` channel (backpressure); the async stream deserializes each |
+| In-Memory  | Per-event downcast + clone materialized under the lock, then yielded one at a time (data already in memory)                              |
+| File       | Per-event deserialize under the index read guard preserving linearization order, then yielded one at a time                              |
+
+A per-row/per-event decode failure is yielded as `EventStoreError::DeserializationFailed`, preserving the cross-backend type-mismatch contract.
+
 ## PostgreSQL Backend
 
 **Connection:** `sqlx` pool with configurable max connections, timeouts.
@@ -167,3 +187,4 @@ eventcore = { version = "0.6", features = ["sqlite"] }
 - ADR-0038 through ADR-0046: File backend format, linearization, locking, and merge mode
 - ADR-017: Reserved characters for StreamId and StreamPrefix
 - ADR-0047: Glob pattern matching for subscriptions (EventFilter pushdown)
+- ADR-0049: Streaming reads for `read_stream` (per-backend streaming strategies)

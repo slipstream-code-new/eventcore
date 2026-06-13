@@ -112,22 +112,31 @@ where
                 // another, so the sum across all accounts should be 0.
                 let mut total_balance: i64 = 0;
                 for account_id in accounts.iter() {
-                    let reader = store.read_stream::<TransferEvent>(account_id.clone()).await;
-                    match reader {
-                        Ok(r) => {
-                            for event in r.into_iter() {
-                                match event {
-                                    TransferEvent::Credited { amount, .. } => {
-                                        let amt: u16 = amount.into();
-                                        total_balance += amt as i64;
-                                    }
-                                    TransferEvent::Debited { amount, .. } => {
-                                        let amt: u16 = amount.into();
-                                        total_balance -= amt as i64;
+                    let stream = store.read_stream::<TransferEvent>(account_id.clone()).await;
+                    match stream {
+                        Ok(stream) => match eventcore::collect_events(stream).await {
+                            Ok(events) => {
+                                for event in events {
+                                    match event {
+                                        TransferEvent::Credited { amount, .. } => {
+                                            let amt: u16 = amount.into();
+                                            total_balance += amt as i64;
+                                        }
+                                        TransferEvent::Debited { amount, .. } => {
+                                            let amt: u16 = amount.into();
+                                            total_balance -= amt as i64;
+                                        }
                                     }
                                 }
                             }
-                        }
+                            Err(e) => {
+                                eprintln!(
+                                    "Failed to read stream {} for correctness: {e}",
+                                    account_id
+                                );
+                                return false;
+                            }
+                        },
                         Err(e) => {
                             eprintln!("Failed to read stream {} for correctness: {e}", account_id);
                             return false;

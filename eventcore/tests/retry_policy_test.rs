@@ -4,7 +4,7 @@ use eventcore::{
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_types::{
-    EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamVersion, StreamWrites,
+    EventStore, EventStoreError, EventStream, EventStreamSlice, StreamVersion, StreamWrites,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -82,7 +82,7 @@ impl EventStore for ConflictNTimesStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         self.inner.read_stream(stream_id).await
     }
 

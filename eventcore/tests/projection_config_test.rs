@@ -151,7 +151,7 @@ impl EventStore for TestBackend {
         &self,
         stream_id: StreamId,
     ) -> impl Future<
-        Output = Result<eventcore_types::EventStreamReader<E>, eventcore_types::EventStoreError>,
+        Output = Result<eventcore_types::EventStream<E>, eventcore_types::EventStoreError>,
     > + Send {
         self.event_store.read_stream(stream_id)
     }

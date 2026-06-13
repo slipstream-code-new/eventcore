@@ -14,7 +14,8 @@ use eventcore::{
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_types::{
-    EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamVersion, StreamWrites,
+    EventStore, EventStoreError, EventStream, EventStreamSlice, StreamVersion, StreamWrites,
+    collect_events,
 };
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
@@ -129,20 +130,24 @@ impl SnapshottingStore {
     }
 
     async fn record_snapshot(&self) {
-        let source_events = self
+        let source_stream = self
             .inner
             .read_stream::<TestDomainEvents>(self.source_stream.clone())
             .await
             .expect("snapshotting store should read source stream after write");
-        let destination_events = self
+        let destination_stream = self
             .inner
             .read_stream::<TestDomainEvents>(self.destination_stream.clone())
             .await
             .expect("snapshotting store should read destination stream after write");
 
         let snapshot = StreamSnapshot {
-            source_events: source_events.into_iter().collect(),
-            destination_events: destination_events.into_iter().collect(),
+            source_events: collect_events(source_stream)
+                .await
+                .expect("collecting source events"),
+            destination_events: collect_events(destination_stream)
+                .await
+                .expect("collecting destination events"),
         };
 
         let mut snapshots = self.snapshots.lock().await;
@@ -154,7 +159,7 @@ impl EventStore for SnapshottingStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         self.inner.read_stream(stream_id).await
     }
 
@@ -257,7 +262,7 @@ impl EventStore for ConflictInjectingStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         self.inner.read_stream(stream_id).await
     }
 
@@ -280,11 +285,14 @@ impl EventStore for ConflictInjectingStore {
         };
 
         if should_inject {
-            let current_events = self
+            let current_stream = self
                 .inner
                 .read_stream::<TestDomainEvents>(self.conflict_stream.clone())
                 .await
                 .expect("conflict injector should read target stream prior to injection");
+            let current_events: Vec<TestDomainEvents> = collect_events(current_stream)
+                .await
+                .expect("collecting conflict stream events");
 
             let expected_version = StreamVersion::new(current_events.len());
             let audit_event = TestDomainEvents::Audit {
@@ -377,14 +385,20 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
     let result = execute(&store, command, RetryPolicy::new()).await;
 
     // And: Developer inspects both streams to verify debit/credit behavior and versions.
-    let from_events = store
+    let from_stream = store
         .read_stream::<TestDomainEvents>(from_account.clone())
         .await
         .expect("reading source account stream succeeds");
-    let to_events = store
+    let to_stream = store
         .read_stream::<TestDomainEvents>(to_account.clone())
         .await
         .expect("reading destination account stream succeeds");
+    let from_events: Vec<TestDomainEvents> = collect_events(from_stream)
+        .await
+        .expect("collecting source account events");
+    let to_events: Vec<TestDomainEvents> = collect_events(to_stream)
+        .await
+        .expect("collecting destination account events");
 
     // Single assertion: struct comparison keeps one assert while inspecting both accounts.
     let attempts = result
@@ -394,8 +408,8 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
     let actual = TransferAcceptanceResult {
         succeeded: result.is_ok(),
         attempts,
-        from_account: account_snapshot(&from_account, from_events.into_iter().collect()),
-        to_account: account_snapshot(&to_account, to_events.into_iter().collect()),
+        from_account: account_snapshot(&from_account, from_events),
+        to_account: account_snapshot(&to_account, to_events),
     };
 
     let expected = TransferAcceptanceResult {
@@ -461,14 +475,20 @@ async fn transfer_retries_after_destination_conflict() {
     let result = execute(&conflict_store, command, RetryPolicy::new()).await;
 
     // Then: Source reflects debit, destination reflects injected audit between deposit and credit.
-    let from_events = conflict_store
+    let from_stream = conflict_store
         .read_stream::<TestDomainEvents>(from_account.clone())
         .await
         .expect("reading source account stream succeeds after retry");
-    let to_events = conflict_store
+    let to_stream = conflict_store
         .read_stream::<TestDomainEvents>(to_account.clone())
         .await
         .expect("reading destination account stream succeeds after retry");
+    let from_events: Vec<TestDomainEvents> = collect_events(from_stream)
+        .await
+        .expect("collecting source account events");
+    let to_events: Vec<TestDomainEvents> = collect_events(to_stream)
+        .await
+        .expect("collecting destination account events");
 
     let attempts = result
         .as_ref()
@@ -477,8 +497,8 @@ async fn transfer_retries_after_destination_conflict() {
     let actual = TransferAcceptanceResult {
         succeeded: result.is_ok(),
         attempts,
-        from_account: account_snapshot(&from_account, from_events.into_iter().collect()),
-        to_account: account_snapshot(&to_account, to_events.into_iter().collect()),
+        from_account: account_snapshot(&from_account, from_events),
+        to_account: account_snapshot(&to_account, to_events),
     };
 
     let expected = TransferAcceptanceResult {
@@ -589,18 +609,22 @@ async fn concurrent_transfers_never_expose_partial_state() {
             }
 
             // Read both streams and record snapshot
-            let source_events = poller_store
+            let source_stream = poller_store
                 .read_stream::<TestDomainEvents>(poller_from_stream.clone())
                 .await
                 .expect("poller should read source stream");
-            let destination_events = poller_store
+            let destination_stream = poller_store
                 .read_stream::<TestDomainEvents>(poller_to_stream.clone())
                 .await
                 .expect("poller should read destination stream");
 
             let snapshot = StreamSnapshot {
-                source_events: source_events.into_iter().collect(),
-                destination_events: destination_events.into_iter().collect(),
+                source_events: collect_events(source_stream)
+                    .await
+                    .expect("collecting source events"),
+                destination_events: collect_events(destination_stream)
+                    .await
+                    .expect("collecting destination events"),
             };
 
             let mut guard = poller_snapshots.lock().await;
@@ -655,19 +679,23 @@ async fn concurrent_transfers_never_expose_partial_state() {
         .expect("poller task should complete without panicking");
 
     // Then: Read final state of both streams to verify transfers completed
-    let final_source_reader = snapshotting_store
+    let final_source_stream = snapshotting_store
         .read_stream::<TestDomainEvents>(from_account.clone())
         .await
         .expect("reading final source stream succeeds");
-    let final_destination_reader = snapshotting_store
+    let final_destination_stream = snapshotting_store
         .read_stream::<TestDomainEvents>(to_account.clone())
         .await
         .expect("reading final destination stream succeeds");
+    let final_source_events: Vec<TestDomainEvents> = collect_events(final_source_stream)
+        .await
+        .expect("collecting final source events");
+    let final_destination_events: Vec<TestDomainEvents> = collect_events(final_destination_stream)
+        .await
+        .expect("collecting final destination events");
 
-    let final_source_snapshot =
-        account_snapshot(&from_account, final_source_reader.into_iter().collect());
-    let final_destination_snapshot =
-        account_snapshot(&to_account, final_destination_reader.into_iter().collect());
+    let final_source_snapshot = account_snapshot(&from_account, final_source_events);
+    let final_destination_snapshot = account_snapshot(&to_account, final_destination_events);
 
     // Retrieve all snapshots captured by the poller and snapshotting store
     let recorded_snapshots = {

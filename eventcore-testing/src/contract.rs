@@ -1,7 +1,7 @@
 use eventcore_types::{
     BatchSize, CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore,
     EventStoreError, ProjectorCoordinator, StreamId, StreamPattern, StreamPosition, StreamPrefix,
-    StreamVersion, StreamWrites,
+    StreamVersion, StreamWrites, collect_events,
 };
 
 use serde::{Deserialize, Serialize};
@@ -135,13 +135,16 @@ where
         .await
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
 
-    let reader = store
+    let stream = store
         .read_stream::<ContractTestEvent>(stream_id.clone())
         .await
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
+    let events = collect_events(stream)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
 
-    let len = reader.len();
-    let empty = reader.is_empty();
+    let len = events.len();
+    let empty = events.is_empty();
 
     if empty {
         return Err(ContractTestFailure::assertion(
@@ -234,17 +237,23 @@ where
         .await
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
 
-    let left_reader = store
+    let left_stream_events = store
         .read_stream::<ContractTestEvent>(left_stream.clone())
         .await
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
-
-    let right_reader = store
-        .read_stream::<ContractTestEvent>(right_stream.clone())
+    let left_events = collect_events(left_stream_events)
         .await
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
 
-    let left_len = left_reader.len();
+    let right_stream_events = store
+        .read_stream::<ContractTestEvent>(right_stream.clone())
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
+    let right_events = collect_events(right_stream_events)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
+
+    let left_len = left_events.len();
     if left_len != 1 {
         return Err(ContractTestFailure::assertion(
             SCENARIO,
@@ -255,7 +264,7 @@ where
         ));
     }
 
-    if left_reader
+    if left_events
         .iter()
         .any(|event| event.stream_id() != &left_stream)
     {
@@ -265,7 +274,7 @@ where
         ));
     }
 
-    let right_len = right_reader.len();
+    let right_len = right_events.len();
     if right_len != 1 {
         return Err(ContractTestFailure::assertion(
             SCENARIO,
@@ -276,7 +285,7 @@ where
         ));
     }
 
-    if right_reader
+    if right_events
         .iter()
         .any(|event| event.stream_id() != &right_stream)
     {
@@ -299,12 +308,15 @@ where
     let store = make_store();
     let stream_id = contract_stream_id(SCENARIO, "ghost")?;
 
-    let reader = store
+    let stream = store
         .read_stream::<ContractTestEvent>(stream_id.clone())
         .await
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
+    let events = collect_events(stream)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
 
-    if !reader.is_empty() {
+    if !events.is_empty() {
         return Err(ContractTestFailure::assertion(
             SCENARIO,
             "expected read_stream to succeed with no events for an untouched stream",
@@ -354,34 +366,40 @@ where
 
     match store.append_events(writes).await {
         Err(EventStoreError::VersionConflict { .. }) => {
-            let left_reader = store
+            let left_stream_events = store
                 .read_stream::<ContractTestEvent>(left_stream.clone())
                 .await
                 .map_err(|error| {
                     ContractTestFailure::store_error(SCENARIO, "read_stream", error)
                 })?;
-            if left_reader.len() != 1 {
+            let left_events = collect_events(left_stream_events).await.map_err(|error| {
+                ContractTestFailure::store_error(SCENARIO, "read_stream", error)
+            })?;
+            if left_events.len() != 1 {
                 return Err(ContractTestFailure::assertion(
                     SCENARIO,
                     format!(
                         "expected left stream to remain at len=1 after failed append, observed {}",
-                        left_reader.len()
+                        left_events.len()
                     ),
                 ));
             }
 
-            let right_reader = store
+            let right_stream_events = store
                 .read_stream::<ContractTestEvent>(right_stream.clone())
                 .await
                 .map_err(|error| {
                     ContractTestFailure::store_error(SCENARIO, "read_stream", error)
                 })?;
-            if right_reader.len() != 1 {
+            let right_events = collect_events(right_stream_events).await.map_err(|error| {
+                ContractTestFailure::store_error(SCENARIO, "read_stream", error)
+            })?;
+            if right_events.len() != 1 {
                 return Err(ContractTestFailure::assertion(
                     SCENARIO,
                     format!(
                         "expected right stream to remain at len=1 after failed append, observed {}",
-                        right_reader.len()
+                        right_events.len()
                     ),
                 ));
             }
@@ -448,8 +466,15 @@ where
         .await
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
 
-    // Read the same stream but request a different event type
-    let result = store.read_stream::<MismatchedEvent>(stream_id).await;
+    // Read the same stream but request a different event type. Opening the
+    // stream may succeed; the type mismatch surfaces as a per-event decode
+    // failure when the stream is consumed. Either path (an open-time error or
+    // an item-level error during collection) is acceptable, but the stream
+    // MUST NOT silently yield events of the wrong type.
+    let result = match store.read_stream::<MismatchedEvent>(stream_id).await {
+        Ok(stream) => collect_events(stream).await,
+        Err(error) => Err(error),
+    };
 
     match result {
         Err(EventStoreError::DeserializationFailed { .. }) => Ok(()),
@@ -460,15 +485,15 @@ where
                 other
             ),
         )),
-        Ok(reader) if reader.is_empty() => Err(ContractTestFailure::assertion(
+        Ok(events) if events.is_empty() => Err(ContractTestFailure::assertion(
             SCENARIO,
             "read_stream silently returned empty results instead of erroring on type mismatch",
         )),
-        Ok(reader) => Err(ContractTestFailure::assertion(
+        Ok(events) => Err(ContractTestFailure::assertion(
             SCENARIO,
             format!(
                 "read_stream returned {} events instead of erroring on type mismatch",
-                reader.len()
+                events.len()
             ),
         )),
     }

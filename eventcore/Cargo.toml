@@ -37,6 +37,7 @@ eventcore-postgres = { version = "0.9.0", path = "../eventcore-postgres", option
 
 # Optional dependency for SQLite backend (enabled via feature flag)
 eventcore-sqlite = { version = "0.9.0", path = "../eventcore-sqlite", optional = true }
+futures = "0.3.32"
 
 [dev-dependencies]
 eventcore-memory = { path = "../eventcore-memory" }

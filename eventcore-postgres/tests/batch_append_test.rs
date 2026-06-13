@@ -8,7 +8,7 @@
 mod common;
 
 use eventcore_testing::contract::ContractTestEvent;
-use eventcore_types::{EventStore, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{EventStore, StreamId, StreamVersion, StreamWrites, collect_events};
 
 #[tokio::test]
 async fn append_events_persists_large_batch_across_chunk_boundary() {
@@ -36,9 +36,10 @@ async fn append_events_persists_large_batch_across_chunk_boundary() {
         .expect("append_events should persist the full batch atomically");
 
     // Then: reading the stream back returns every appended event.
-    let reader = store
+    let stream = store
         .read_stream::<ContractTestEvent>(stream_id.clone())
         .await
         .expect("read_stream should succeed");
-    assert_eq!(reader.len(), EVENT_COUNT);
+    let events: Vec<ContractTestEvent> = collect_events(stream).await.expect("collecting events");
+    assert_eq!(events.len(), EVENT_COUNT);
 }

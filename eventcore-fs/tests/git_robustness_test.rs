@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use eventcore_fs::{FileEventStore, FsConfig, FsyncPolicy, TransactionId};
-use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites, collect_events};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -104,12 +104,13 @@ async fn a_hand_edited_transaction_file_is_rejected_by_fsck() {
         "a store with a tampered file is not clean"
     );
 
-    let reader = store
+    let event_stream = store
         .read_stream::<Note>(account)
         .await
         .expect("read does not panic");
+    let notes: Vec<Note> = collect_events(event_stream).await.expect("collect");
     assert_eq!(
-        reader.len(),
+        notes.len(),
         0,
         "the tampered transaction is excluded from the linearized history"
     );
@@ -152,12 +153,13 @@ async fn a_transaction_referencing_an_absent_parent_is_reported_as_dangling() {
     );
 
     // Reads remain robust — the child's events are still readable.
-    let reader = store
+    let event_stream = store
         .read_stream::<Note>(account)
         .await
         .expect("read does not panic");
+    let notes: Vec<Note> = collect_events(event_stream).await.expect("collect");
     assert!(
-        reader.iter().any(|note| note.text == "second"),
+        notes.iter().any(|note| note.text == "second"),
         "the dangling transaction's events are not silently dropped"
     );
 }

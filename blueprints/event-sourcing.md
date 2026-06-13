@@ -15,8 +15,11 @@ EventCore implements aggregateless event sourcing where commands can atomically 
 
 ### Write Path
 
-1. **Stream Reading** — `EventStore::read_stream()` loads all events for declared streams
-2. **State Reconstruction** — Events folded via `CommandLogic::apply()` into command state
+1. **Stream Reading** — `EventStore::read_stream()` opens an async `EventStream<E>`
+   that yields each event in stream-version order; the executor folds events
+   incrementally as they arrive (peak memory is bounded by the in-progress
+   command state, not the stream length — see ADR-0049)
+2. **State Reconstruction** — Each streamed event is folded via `CommandLogic::apply()` into command state one at a time
 3. **Business Logic** — `CommandLogic::handle()` validates preconditions and produces new events
 4. **Atomic Append** — `EventStore::append_events()` persists all events atomically with version checks
 
@@ -42,15 +45,16 @@ EventCore implements aggregateless event sourcing where commands can atomically 
 
 ## Key Types
 
-| Type                   | Purpose                                                    |
-| ---------------------- | ---------------------------------------------------------- |
-| `StreamId`             | Validated stream identifier (no glob chars, max 255 chars) |
-| `StreamVersion`        | Monotonic per-stream event count                           |
-| `StreamPosition`       | UUIDv7-based global event position                         |
-| `StreamWrites`         | Builder for atomic multi-stream write batches              |
-| `EventStreamReader<E>` | Typed read handle for stream events                        |
-| `EventFilter`          | Stream prefix filtering for projections                    |
-| `EventPage`            | Cursor-based pagination                                    |
+| Type             | Purpose                                                            |
+| ---------------- | ------------------------------------------------------------------ |
+| `StreamId`       | Validated stream identifier (no glob chars, max 255 chars)         |
+| `StreamVersion`  | Monotonic per-stream event count                                   |
+| `StreamPosition` | UUIDv7-based global event position                                 |
+| `StreamWrites`   | Builder for atomic multi-stream write batches                      |
+| `EventStream<E>` | Async stream of `Result<E, _>` yielded by `read_stream` (ADR-0049) |
+| `collect_events` | Helper that drains an `EventStream<E>` into a `Vec<E>`             |
+| `EventFilter`    | Stream prefix filtering for projections                            |
+| `EventPage`      | Cursor-based pagination                                            |
 
 ## Key Traits
 
@@ -102,3 +106,4 @@ not used for deserialization routing.
 - ADR-012: Event trait for domain-first design
 - ADR-017: StreamId reserved characters
 - ADR-035: Event schema evolution via enum variants
+- ADR-0049: Streaming reads for `read_stream` (incremental fold, `EventStream<E>`, `collect_events`)

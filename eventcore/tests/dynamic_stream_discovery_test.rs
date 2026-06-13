@@ -7,7 +7,8 @@ use eventcore::{
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_types::{
-    EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamVersion, StreamWrites,
+    EventStore, EventStoreError, EventStream, EventStreamSlice, StreamVersion, StreamWrites,
+    collect_events,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
@@ -64,14 +65,20 @@ async fn executor_registers_discovered_streams_for_optimistic_concurrency() {
     let result = execute(&store, command, RetryPolicy::new()).await;
 
     // Then: Both streams should contain the original seed plus the captured event without undeclared stream errors.
-    let order_events = store
+    let order_stream_events = store
         .read_stream::<CheckoutEvent>(order_stream.clone())
         .await
         .expect("order stream read should succeed");
-    let payment_events = store
+    let order_events = collect_events(order_stream_events)
+        .await
+        .expect("order stream collect should succeed");
+    let payment_stream_events = store
         .read_stream::<CheckoutEvent>(payment_stream.clone())
         .await
         .expect("payment stream read should succeed");
+    let payment_events = collect_events(payment_stream_events)
+        .await
+        .expect("payment stream collect should succeed");
 
     let actual = (result.is_ok(), order_events.len(), payment_events.len());
     let expected = (true, 2, 2);
@@ -168,7 +175,7 @@ impl EventStore for ConflictOnceStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         self.inner.read_stream(stream_id).await
     }
 
@@ -232,7 +239,7 @@ impl EventStore for CountingEventStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         let key = stream_id.to_string();
         let reader = self.inner.read_stream::<E>(stream_id).await;
 

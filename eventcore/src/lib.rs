@@ -10,8 +10,8 @@ mod projection_pipeline;
 // Re-export application-developer types from eventcore-types
 pub use eventcore_types::{
     AttemptNumber, CommandError, CommandLogic, CommandStreams, DelayMilliseconds, Event,
-    FailureContext, FailureStrategy, NewEvents, Projector, StreamDeclarations, StreamId,
-    StreamPosition, StreamResolver,
+    EventStream, FailureContext, FailureStrategy, NewEvents, Projector, StreamDeclarations,
+    StreamId, StreamPosition, StreamResolver, collect_events,
 };
 
 // Internal imports for types used by this crate but not re-exported
@@ -421,9 +421,17 @@ where
         match step {
             PipelineStep::Done(PipelineOutcome::Success(response)) => return Ok(response),
             PipelineStep::Done(PipelineOutcome::Error(err)) => return Err(err),
+            PipelineStep::WaitForResult => {
+                // The pipeline folded a streamed event and is ready for the
+                // next item; the surrounding `ReadStream` arm owns the pump
+                // loop, so reaching this arm at top level is a logic error.
+                unreachable!("WaitForResult is consumed inside the ReadStream pump loop")
+            }
             PipelineStep::Yield(StoreEffect::ReadStream { stream_id }) => {
-                let result = store.read_stream::<C::Event>(stream_id).await;
-                step = pipeline.resume(StoreEffectResult::StreamRead(result));
+                // Open the stream, then push events into the pipeline one at a
+                // time so the fold happens incrementally. The whole stream is
+                // never collected into a Vec here — that is the point of #364.
+                step = pump_stream_reads::<C, S>(&store, &mut pipeline, stream_id).await;
             }
             PipelineStep::Yield(StoreEffect::AppendEvents { writes }) => {
                 let result = store.append_events(writes).await;
@@ -437,11 +445,53 @@ where
     }
 }
 
+/// Open a stream and push its events into the pipeline one event at a time.
+///
+/// This is the heart of the #364 streaming-read change: instead of collecting
+/// the entire stream into a `Vec` and folding it in one shot, the shell pulls
+/// each event from the async stream and hands it to `pipeline.resume(...)`,
+/// which folds it into the in-progress command state immediately. Only the
+/// in-progress state is retained — the stream is never materialized here.
+///
+/// Returns the next `PipelineStep` for the outer execution loop to drive: the
+/// step the pipeline reaches once the stream ends, or a `Done(Error)` if
+/// opening the stream or decoding an event failed.
+async fn pump_stream_reads<C, S>(
+    store: &S,
+    pipeline: &mut execute_pipeline::ExecutePipeline<C>,
+    stream_id: StreamId,
+) -> execute_pipeline::PipelineStep
+where
+    C: CommandLogic,
+    S: EventStore,
+{
+    use effects::StoreEffectResult;
+    use execute_pipeline::PipelineStep;
+    use futures::StreamExt;
+
+    let mut events = match store.read_stream::<C::Event>(stream_id).await {
+        Ok(events) => events,
+        Err(e) => return pipeline.resume(StoreEffectResult::StreamReadError(e)),
+    };
+
+    while let Some(item) = events.next().await {
+        match item {
+            Ok(event) => {
+                let step = pipeline.resume(StoreEffectResult::StreamEvent(event));
+                debug_assert!(matches!(step, PipelineStep::WaitForResult));
+            }
+            Err(e) => return pipeline.resume(StoreEffectResult::StreamReadError(e)),
+        }
+    }
+
+    pipeline.resume(StoreEffectResult::StreamEnded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use eventcore_memory::InMemoryEventStore;
-    use eventcore_types::{EventStoreError, EventStreamReader, EventStreamSlice};
+    use eventcore_types::{EventStoreError, EventStream, EventStreamSlice};
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
 
@@ -592,7 +642,7 @@ mod tests {
             async fn read_stream<E: Event>(
                 &self,
                 _stream_id: StreamId,
-            ) -> Result<EventStreamReader<E>, EventStoreError> {
+            ) -> Result<EventStream<E>, EventStoreError> {
                 Err(EventStoreError::VersionConflict {
                     stream_id: _stream_id,
                     expected: StreamVersion::new(0),
@@ -700,7 +750,7 @@ mod tests {
             async fn read_stream<E: Event>(
                 &self,
                 stream_id: StreamId,
-            ) -> Result<EventStreamReader<E>, EventStoreError> {
+            ) -> Result<EventStream<E>, EventStoreError> {
                 self.inner.read_stream(stream_id).await
             }
 
@@ -858,7 +908,7 @@ mod tests {
         async fn read_stream<E: Event>(
             &self,
             stream_id: StreamId,
-        ) -> Result<EventStreamReader<E>, EventStoreError> {
+        ) -> Result<EventStream<E>, EventStoreError> {
             // Delegate to inner store for reading (returns empty stream)
             self.inner.read_stream(stream_id).await
         }
@@ -900,7 +950,7 @@ mod tests {
         async fn read_stream<E: Event>(
             &self,
             stream_id: StreamId,
-        ) -> Result<EventStreamReader<E>, EventStoreError> {
+        ) -> Result<EventStream<E>, EventStoreError> {
             self.inner.read_stream(stream_id).await
         }
 
