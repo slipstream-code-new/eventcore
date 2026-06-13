@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-v0.9.0...eventcore-v0.10.0) - 2026-06-13
+
+### Documentation
+
+- documentation completeness audit ([#244](https://git.johnwilger.com/Slipstream/eventcore/pulls/244)) ([#416](https://git.johnwilger.com/Slipstream/eventcore/pulls/416))
+
+### Features
+
+- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-v0.8.0...eventcore-v0.8.1) - 2026-06-13
 
 ### Deps
