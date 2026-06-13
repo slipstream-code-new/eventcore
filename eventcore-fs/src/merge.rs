@@ -56,10 +56,55 @@ impl Fork {
     }
 }
 
+/// A transaction whose `parent_transaction_ids` reference files not present on
+/// disk — a partial or aborted `git merge` (ADR-0046). It is reported, never
+/// crashed on or silently dropped; when the missing files arrive the reference
+/// resolves on the next read.
+#[derive(Debug, Clone)]
+pub struct DanglingTransaction {
+    pub(crate) transaction_id: TransactionId,
+    pub(crate) missing_parents: Vec<TransactionId>,
+}
+
+impl DanglingTransaction {
+    /// The transaction with one or more absent parents.
+    pub fn transaction_id(&self) -> TransactionId {
+        self.transaction_id
+    }
+
+    /// The parent transactions referenced but not present on disk.
+    pub fn missing_parents(&self) -> &[TransactionId] {
+        &self.missing_parents
+    }
+}
+
+/// A transaction file rejected by the read-time fsck because its payload did
+/// not match the recorded content-hash anchor — an illegal edit a `merge=union`
+/// would otherwise mask (ADR-0046).
+#[derive(Debug, Clone)]
+pub struct IntegrityFailure {
+    pub(crate) transaction_id: TransactionId,
+    pub(crate) detail: String,
+}
+
+impl IntegrityFailure {
+    /// The rejected transaction.
+    pub fn transaction_id(&self) -> TransactionId {
+        self.transaction_id
+    }
+
+    /// A human-readable description of the integrity mismatch.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
 /// A snapshot of the store's reconciliation state.
 #[derive(Debug, Clone)]
 pub struct StoreStatus {
     pub(crate) forks: Vec<Fork>,
+    pub(crate) dangling: Vec<DanglingTransaction>,
+    pub(crate) integrity_failures: Vec<IntegrityFailure>,
 }
 
 impl StoreStatus {
@@ -68,9 +113,20 @@ impl StoreStatus {
         &self.forks
     }
 
-    /// True when there are no unresolved forks.
+    /// Transactions referencing absent parents (a partial/aborted git merge).
+    pub fn dangling(&self) -> &[DanglingTransaction] {
+        &self.dangling
+    }
+
+    /// Transaction files rejected by the read-time fsck.
+    pub fn integrity_failures(&self) -> &[IntegrityFailure] {
+        &self.integrity_failures
+    }
+
+    /// True when there are no unresolved forks, no dangling transactions, and
+    /// no integrity failures.
     pub fn is_clean(&self) -> bool {
-        self.forks.is_empty()
+        self.forks.is_empty() && self.dangling.is_empty() && self.integrity_failures.is_empty()
     }
 }
 
@@ -179,6 +235,31 @@ fn fork_is_resolved(heads: &[Uuid], headers: &HashMap<Uuid, TransactionHeader>) 
             .iter()
             .all(|&head| is_ancestor(head, candidate, headers))
     })
+}
+
+/// Find transactions that reference parents not present on disk (ADR-0046).
+/// Linearization already tolerates missing parents (they are treated as absent
+/// edges); this reports them so a partial/aborted merge is observable.
+pub(crate) fn detect_dangling_in(
+    headers: &HashMap<Uuid, TransactionHeader>,
+) -> Vec<DanglingTransaction> {
+    let mut dangling: Vec<DanglingTransaction> = Vec::new();
+    for header in headers.values() {
+        let missing: Vec<TransactionId> = header
+            .parent_transaction_ids
+            .iter()
+            .filter(|parent| !headers.contains_key(*parent))
+            .map(|parent| TransactionId::new(*parent))
+            .collect();
+        if !missing.is_empty() {
+            dangling.push(DanglingTransaction {
+                transaction_id: TransactionId::new(header.transaction_id),
+                missing_parents: missing,
+            });
+        }
+    }
+    dangling.sort_by_key(DanglingTransaction::transaction_id);
+    dangling
 }
 
 /// Fail loud if two concurrent transactions share a `replica_id` (ADR-0044).

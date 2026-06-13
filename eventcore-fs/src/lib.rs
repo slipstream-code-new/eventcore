@@ -50,7 +50,8 @@ pub use config::{FsConfig, FsyncPolicy};
 pub use coordination::{FileCheckpointStore, FileLeadershipGuard, FileProjectorCoordinator};
 pub use error::{FsCheckpointError, FsCoordinationError, FsEventStoreError};
 pub use merge::{
-    BranchView, Fork, ForkContext, ReconcileReport, ResolutionOutcome, StoreStatus, TransactionId,
+    BranchView, DanglingTransaction, Fork, ForkContext, IntegrityFailure, ReconcileReport,
+    ResolutionOutcome, StoreStatus, TransactionId,
 };
 
 use config::Roots;
@@ -60,7 +61,7 @@ use format::{
     write_transaction_file,
 };
 use index::{Index, build_envelopes, compute_tips, scan_index};
-use merge::detect_forks_in;
+use merge::{detect_dangling_in, detect_forks_in};
 
 #[derive(Debug)]
 struct Shared {
@@ -229,6 +230,7 @@ impl EventStore for FileEventStore {
                 parent_transaction_ids,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 stream_bases,
+                content_hash: None,
             };
             (header, envelopes, new_events)
         };
@@ -359,10 +361,25 @@ impl FileEventStore {
         detect_forks_in(&index.headers)
     }
 
-    /// A snapshot of the store's reconciliation state.
+    /// A snapshot of the store's reconciliation state: unresolved forks,
+    /// dangling transactions (absent parents from a partial git merge), and
+    /// transaction files rejected by the read-time fsck (ADR-0045/0046).
     pub fn status(&self) -> Result<StoreStatus, FsEventStoreError> {
+        let index = self.read_index()?;
+        let forks = detect_forks_in(&index.headers)?;
+        let dangling = detect_dangling_in(&index.headers);
+        let integrity_failures = index
+            .integrity_failures
+            .iter()
+            .map(|(transaction_id, detail)| IntegrityFailure {
+                transaction_id: TransactionId::new(*transaction_id),
+                detail: detail.clone(),
+            })
+            .collect();
         Ok(StoreStatus {
-            forks: self.detect_forks()?,
+            forks,
+            dangling,
+            integrity_failures,
         })
     }
 
@@ -511,6 +528,7 @@ impl FileEventStore {
                 parent_transaction_ids: parents,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 stream_bases,
+                content_hash: None,
             };
             (header, envelopes, new_events)
         };

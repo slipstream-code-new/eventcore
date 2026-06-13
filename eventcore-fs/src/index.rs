@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::config::Roots;
 use crate::error::FsEventStoreError;
-use crate::format::{EventEnvelope, TransactionHeader, parse_transaction};
+use crate::format::{EventEnvelope, LoadedTransaction, TransactionHeader, load_transaction};
 use crate::ingestion::{IngestionLog, position_from_seq};
 
 /// An event as held in the in-memory linearized index.
@@ -37,6 +37,10 @@ pub(crate) struct Index {
     /// This replica's local-ingestion order (sequence-per-event), held so the
     /// append path can hand out the next position.
     pub(crate) log: IngestionLog,
+    /// Transaction files rejected by the read-time fsck because their payload
+    /// did not match the recorded content-hash anchor (ADR-0046). They are
+    /// excluded from the linearized history and surfaced via `status()`.
+    pub(crate) integrity_failures: Vec<(Uuid, String)>,
 }
 
 impl Index {
@@ -184,6 +188,7 @@ fn build_index(
             streams,
             tips,
             log,
+            integrity_failures: Vec::new(),
         },
         new_entries,
     )
@@ -230,6 +235,7 @@ pub(crate) fn scan_index(roots: &Roots) -> Result<Index, FsEventStoreError> {
         source,
     })?;
     let mut transactions: Vec<(TransactionHeader, Vec<EventEnvelope>)> = Vec::new();
+    let mut integrity_failures: Vec<(Uuid, String)> = Vec::new();
     for entry in read_dir {
         let entry = entry.map_err(|source| FsEventStoreError::InitFailed {
             path: roots.events.clone(),
@@ -239,11 +245,21 @@ pub(crate) fn scan_index(roots: &Roots) -> Result<Index, FsEventStoreError> {
         if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
             continue;
         }
-        transactions.push(parse_transaction(&path)?);
+        // Read-time fsck (ADR-0046): a file whose payload no longer matches its
+        // content-hash anchor is rejected and surfaced via status(), never
+        // parsed into the trusted history.
+        match load_transaction(&path)? {
+            LoadedTransaction::Valid(header, events) => transactions.push((header, events)),
+            LoadedTransaction::Integrity {
+                transaction_id,
+                detail,
+            } => integrity_failures.push((transaction_id, detail)),
+        }
     }
     let log = IngestionLog::load(roots)?;
-    let (index, new_entries) = build_index(transactions, log);
+    let (mut index, new_entries) = build_index(transactions, log);
     index.log.persist(roots, &new_entries)?;
+    index.integrity_failures = integrity_failures;
     Ok(index)
 }
 
@@ -255,6 +271,7 @@ mod tests {
     fn header(id: Uuid, parents: Vec<Uuid>) -> TransactionHeader {
         TransactionHeader {
             format_version: crate::format::FORMAT_VERSION,
+            content_hash: None,
             transaction_id: id,
             replica_id: Uuid::now_v7(),
             parent_transaction_ids: parents,
