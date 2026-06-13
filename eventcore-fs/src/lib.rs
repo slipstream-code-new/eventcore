@@ -32,6 +32,7 @@ mod format;
 mod index;
 mod ingestion;
 mod merge;
+mod replica;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -89,7 +90,7 @@ impl FileEventStore {
         roots.create_dirs()?;
         write_git_metadata(&roots)?;
         let store_lock = StoreLockGuard::acquire(&roots.store_lock_path())?;
-        let replica_id = load_or_create_replica_id(&roots)?;
+        let replica_id = replica::load_or_create_replica_id(&roots, &config)?;
         let index = scan_index(&roots)?;
         Ok(Self {
             shared: Arc::new(Shared {
@@ -101,27 +102,6 @@ impl FileEventStore {
                 _store_lock: store_lock,
             }),
         })
-    }
-}
-
-fn load_or_create_replica_id(roots: &Roots) -> Result<Uuid, FsEventStoreError> {
-    let path = roots.replica_id_path();
-    match fs::read_to_string(&path) {
-        Ok(contents) => {
-            Uuid::parse_str(contents.trim()).map_err(|error| FsEventStoreError::Corrupted {
-                path: path.clone(),
-                detail: format!("invalid replica id: {error}"),
-            })
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let id = Uuid::now_v7();
-            fs::write(&path, id.to_string()).map_err(|source| FsEventStoreError::InitFailed {
-                path: path.clone(),
-                source,
-            })?;
-            Ok(id)
-        }
-        Err(source) => Err(FsEventStoreError::InitFailed { path, source }),
     }
 }
 
@@ -358,11 +338,22 @@ impl EventReader for FileEventStore {
 }
 
 impl FileEventStore {
+    /// This working copy's current `replica_id` — the identity stamped on the
+    /// transactions it writes next (ADR-0044). It is machine-local and
+    /// gitignored; a fresh clone or a `cp -r` to a new path mints its own.
+    pub fn replica_id(&self) -> Uuid {
+        self.shared.replica_id
+    }
+
     /// Detect divergences (forks) in the current — possibly git-merged —
     /// history. A fork is two or more concurrent transactions that each
     /// extended a stream from the same base version. Merge mode is
     /// file-store-specific and lives outside the cross-backend traits
     /// (ADR-0045).
+    ///
+    /// Returns [`FsEventStoreError::ReplicaIdentityConflict`] if two concurrent
+    /// transactions carry the same `replica_id` — the copy trap manifested
+    /// (ADR-0044) — rather than silently merging a corrupt history.
     pub fn detect_forks(&self) -> Result<Vec<Fork>, FsEventStoreError> {
         let index = self.read_index()?;
         detect_forks_in(&index.headers)

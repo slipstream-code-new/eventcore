@@ -22,6 +22,7 @@ pub enum FsyncPolicy {
 pub struct FsConfig {
     pub(crate) root: PathBuf,
     pub(crate) fsync: FsyncPolicy,
+    pub(crate) replica_id: Option<Uuid>,
 }
 
 impl FsConfig {
@@ -30,12 +31,24 @@ impl FsConfig {
         Self {
             root: root.into(),
             fsync: FsyncPolicy::Full,
+            replica_id: None,
         }
     }
 
     /// Override the fsync policy.
     pub fn with_fsync(mut self, policy: FsyncPolicy) -> Self {
         self.fsync = policy;
+        self
+    }
+
+    /// Set this working copy's `replica_id` explicitly, bypassing the
+    /// fingerprint-bound lazy generation (ADR-0044). Use this for environments
+    /// where the filesystem identity is unreliable or replicas are provisioned
+    /// deliberately (containers, CI). The operator is responsible for ensuring
+    /// configured ids are genuinely distinct across independent writers; the
+    /// reconcile-time collision check still applies as a backstop.
+    pub fn with_replica_id(mut self, replica_id: Uuid) -> Self {
+        self.replica_id = Some(replica_id);
         self
     }
 }
@@ -78,6 +91,10 @@ impl Roots {
 
     pub(crate) fn replica_id_path(&self) -> PathBuf {
         self.eventcore.join("replica_id")
+    }
+
+    pub(crate) fn replica_fingerprint_path(&self) -> PathBuf {
+        self.eventcore.join("replica_fingerprint")
     }
 
     pub(crate) fn ingestion_log_path(&self) -> PathBuf {

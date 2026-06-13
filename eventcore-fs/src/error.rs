@@ -28,6 +28,21 @@ pub enum FsEventStoreError {
         /// What went wrong.
         detail: String,
     },
+    /// Two concurrent transactions carry the same `replica_id` but cannot have
+    /// come from a single linear writer — the copy trap manifested (ADR-0044).
+    /// The store fails loud rather than silently merging a corrupt history.
+    #[error(
+        "replica identity conflict: transactions {first} and {second} both \
+         carry replica id {replica_id} but are concurrent (not a single linear writer)"
+    )]
+    ReplicaIdentityConflict {
+        /// One colliding transaction id.
+        first: uuid::Uuid,
+        /// The other colliding transaction id.
+        second: uuid::Uuid,
+        /// The shared replica id that cannot belong to both.
+        replica_id: uuid::Uuid,
+    },
 }
 
 /// Errors from a [`crate::FileCheckpointStore`].
