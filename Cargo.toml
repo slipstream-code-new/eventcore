@@ -2,6 +2,7 @@
 members = [
     "eventcore",
     "eventcore-bench",
+    "eventcore-demo",
     "eventcore-examples",
     "eventcore-fs",
     "eventcore-macros",

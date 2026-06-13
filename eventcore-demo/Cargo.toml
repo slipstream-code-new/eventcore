@@ -1,0 +1,34 @@
+[package]
+name = "eventcore-demo"
+version.workspace = true
+edition.workspace = true
+description = "Runnable demo application showcasing EventCore with the PostgreSQL backend"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Standalone lint config: the workspace forbids `dead_code`, but this crate is
+# both a library and a binary. When the binary target is compiled in the test
+# profile, Cargo's harness marks `main` as dead and emits `#[allow(dead_code)]`,
+# which conflicts with the workspace `forbid`. The sibling binary crates
+# (eventcore-stress, eventcore-bench) relax these lints for the same reason.
+[lints.rust]
+unsafe_code = "forbid"
+dead_code = "allow"
+unreachable_pub = "allow"
+unused_results = "allow"
+
+[lints.clippy]
+allow_attributes = "deny"
+
+[dependencies]
+eventcore = { path = "../eventcore", features = ["postgres"] }
+eventcore-postgres = { path = "../eventcore-postgres" }
+nutype = { version = "0.7.0", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+uuid = { version = "1.23.1", features = ["v7"] }
+
+[dev-dependencies]
+eventcore-memory = { path = "../eventcore-memory" }
