@@ -19,8 +19,8 @@ jobs:
   publish:
     name: Publish Workspace Crates
     runs-on: ubuntu-24.04
-    # Run if: (1) release PR merge (commit starts with "chore: release"), OR (2) manually triggered
-    if: "github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'chore: release')"
+    # Run if: (1) release PR merge (commit starts with "chore(release):"), OR (2) manually triggered
+    if: "github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'chore(release):')"
 
     steps:
       - name: Checkout repository

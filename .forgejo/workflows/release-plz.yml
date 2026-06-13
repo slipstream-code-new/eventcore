@@ -19,7 +19,7 @@ jobs:
     name: Create/Update Release PR
     runs-on: ubuntu-24.04
     # Skip if this is a release PR merge (to avoid infinite loops)
-    if: "!startsWith(github.event.head_commit.message, 'chore: release')"
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
