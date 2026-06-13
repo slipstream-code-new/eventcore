@@ -30,8 +30,8 @@ struct GlobalLogEntry {
     stream_id: String,
     /// Event type name, stored at write time for efficient type filtering
     event_type: String,
-    /// Event data as JSON value
-    event_data: serde_json::Value,
+    /// Event data as serialized JSON (serialized once at append time)
+    event_data: String,
 }
 
 /// Internal storage combining per-stream data with global event ordering.
@@ -169,12 +169,13 @@ impl EventStore for InMemoryEventStore {
             // Generate UUID7 for this event (monotonic, timestamp-ordered)
             let event_id = Uuid::now_v7();
 
-            // Store in global log for EventReader with indexed stream_id, event_type, and event_id
+            // Store in global log for EventReader with indexed stream_id, event_type, and event_id.
+            // event_data is already serialized JSON; keep the raw string.
             data.global_log.push(GlobalLogEntry {
                 event_id,
                 stream_id: stream_id.as_ref().to_string(),
                 event_type: event_type.to_string(),
-                event_data,
+                event_data: event_data.get().to_owned(),
             });
 
             let (events, version) = data
@@ -232,7 +233,7 @@ impl EventReader for InMemoryEventStore {
             })
             .take(page.limit().into_inner())
             .filter_map(|entry| {
-                serde_json::from_value::<E>(entry.event_data.clone())
+                serde_json::from_str::<E>(&entry.event_data)
                     .ok()
                     .map(|e| (e, StreamPosition::new(entry.event_id)))
             })

@@ -1,7 +1,7 @@
 use crate::command::Event;
 use crate::validation::no_glob_metacharacters;
 use nutype::nutype;
-use serde_json::Value;
+use serde_json::value::RawValue;
 use std::collections::HashMap;
 use std::future::Future;
 
@@ -23,7 +23,10 @@ pub struct StreamWriteEntry {
     pub stream_id: StreamId,
     pub event: Box<dyn std::any::Any + Send>,
     pub event_type: &'static str,
-    pub event_data: Value,
+    /// Event payload serialized to JSON exactly once, at append time. Backends
+    /// bind this pre-serialized form directly (verbatim into JSONB/TEXT) rather
+    /// than re-serializing a `serde_json::Value`.
+    pub event_data: Box<RawValue>,
 }
 
 impl StreamWrites {
@@ -86,11 +89,12 @@ impl StreamWrites {
             return Err(EventStoreError::UndeclaredStream { stream_id });
         }
 
-        let event_data =
-            serde_json::to_value(&event).map_err(|error| EventStoreError::SerializationFailed {
+        let event_data = serde_json::value::to_raw_value(&event).map_err(|error| {
+            EventStoreError::SerializationFailed {
                 stream_id: stream_id.clone(),
                 detail: error.to_string(),
-            })?;
+            }
+        })?;
 
         let entry = StreamWriteEntry {
             stream_id,
