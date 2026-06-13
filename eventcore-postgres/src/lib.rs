@@ -3,12 +3,12 @@ use std::time::Duration;
 use eventcore_types::{
     CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
     EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
-    StreamVersion, StreamWriteEntry, StreamWrites,
+    StreamVersion, StreamWrites,
 };
 use nutype::nutype;
 use serde_json::{Value, json};
 use sqlx::types::Json;
-use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query};
+use sqlx::{Pool, Postgres, QueryBuilder, Row, postgres::PgPoolOptions, query};
 use thiserror::Error;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
@@ -196,28 +196,38 @@ impl EventStore for PostgresEventStore {
             .await
             .map_err(|error| map_sqlx_error(error, Operation::SetExpectedVersions))?;
 
-        // Insert all events - trigger handles version assignment and validation
-        for entry in entries {
-            let StreamWriteEntry {
-                stream_id,
-                event_type,
-                event_data,
-                ..
-            } = entry;
+        // Insert all events with a single multi-row INSERT per chunk. The
+        // BEFORE INSERT trigger still assigns gap-free stream versions and
+        // enforces optimistic concurrency for each row in VALUES order,
+        // exactly as it did for the previous per-event loop — replacing N
+        // round-trips with one statement. Chunking keeps the bound-parameter
+        // count well under Postgres' 65535-parameter limit (5 binds/event).
+        // Drop the type-erased event payload (only the in-memory store needs
+        // it) and keep just the Send + Sync fields used for SQL binding, so the
+        // borrows held by the insert loop stay Send across the awaits.
+        let rows: Vec<(StreamId, &'static str, Value)> = entries
+            .into_iter()
+            .map(|entry| (entry.stream_id, entry.event_type, entry.event_data))
+            .collect();
 
-            let event_id = Uuid::now_v7();
-            let _ = query(
-                "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
-                 VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(event_id)
-            .bind(stream_id.as_ref())
-            .bind(event_type)
-            .bind(Json(event_data))
-            .bind(Json(json!({})))
-            .execute(&mut *tx)
-            .await
-            .map_err(|error| map_sqlx_error(error, Operation::AppendEvents))?;
+        const MAX_EVENTS_PER_INSERT: usize = 1000;
+        for chunk in rows.chunks(MAX_EVENTS_PER_INSERT) {
+            let mut builder = QueryBuilder::<Postgres>::new(
+                "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata) ",
+            );
+            let _ = builder.push_values(chunk, |mut row, (stream_id, event_type, event_data)| {
+                let _ = row
+                    .push_bind(Uuid::now_v7())
+                    .push_bind(stream_id.as_ref())
+                    .push_bind(*event_type)
+                    .push_bind(Json(event_data))
+                    .push_bind(Json(json!({})));
+            });
+            let _ = builder
+                .build()
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| map_sqlx_error(error, Operation::AppendEvents))?;
         }
 
         tx.commit()
