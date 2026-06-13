@@ -42,6 +42,26 @@ alongside `workspace = true`.
 4. **`cargo-autoinherit`** must be installed (`cargo install --locked cargo-autoinherit`).
    The pre-commit hook enforces workspace promotion automatically.
 
+## Version Consistency Across Crates
+
+When a member crate adds a dependency that other member crates already use,
+match their version requirement and feature conventions rather than picking a
+fresh version string. Sibling crates in this workspace keep shared dependency
+versions aligned, and release-plz bumps path dependencies in lockstep, so a new
+crate should slot into the existing versions, not diverge.
+
+- Before adding a dependency, check how sibling crates declare it (`grep` the
+  other members' `Cargo.toml`) and use the same version requirement.
+- Divergent **minor/patch** requirements are unified by Cargo's resolver via the
+  lockfile (e.g. `serde "1.0"` and `serde "1.0.228"` compile to one copy), so
+  matching is about consistency and clarity, not just correctness.
+- Divergent **major** versions cause multiple copies to be compiled — avoid this
+  unless a crate genuinely needs a different major.
+- Path dependencies that are also published (e.g. `eventcore-types`) must keep
+  their `version = "x.y.z"` field for crates.io; release-plz updates it on
+  release. Match the exact string the sibling crates use — it is not drift, it
+  is the workspace's lockstep versioning (ADR-025).
+
 ## Pre-Commit Hook
 
 The lefthook pre-commit hook runs `cargo autoinherit` on any commit that
