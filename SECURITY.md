@@ -2,15 +2,14 @@
 
 ## Reporting Security Vulnerabilities
 
-We take the security of EventCore seriously. If you believe you have found a security vulnerability in EventCore, please report it to us through GitHub Security Advisories.
+We take the security of EventCore seriously. If you believe you have found a security vulnerability in EventCore, please report it privately by email.
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+**Please do not report security vulnerabilities through public issues.**
 
 ### How to Report
 
-1. Go to the [Security tab](https://github.com/jwilger/eventcore/security) in our GitHub repository
-2. Click "Report a vulnerability"
-3. Provide a clear description of the vulnerability including:
+1. Email **john@johnwilger.com** with a subject line starting with `[eventcore security]`
+2. Provide a clear description of the vulnerability including:
    - Type of vulnerability (e.g., SQL injection, resource exhaustion)
    - Affected components or modules
    - Steps to reproduce
@@ -200,7 +199,6 @@ Specific compliance documentation is in development.
 
 For non-security questions, please use:
 
-- GitHub Issues for bug reports and feature requests
-- GitHub Discussions for questions and community support
+- [Forgejo Issues](https://git.johnwilger.com/Slipstream/eventcore/issues) for bug reports and feature requests
 
-For security issues, use only the GitHub Security Advisory process described above.
+For security issues, use only the private email reporting process described above.
