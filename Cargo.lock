@@ -631,6 +631,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "eventcore-demo"
+version = "0.9.0"
+dependencies = [
+ "eventcore",
+ "eventcore-memory",
+ "eventcore-postgres",
+ "nutype",
+ "serde",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "eventcore-examples"
 version = "0.9.0"
 dependencies = [
