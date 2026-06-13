@@ -1,7 +1,9 @@
 //! Given-When-Then testing helpers for eventcore commands.
 
 use eventcore_memory::InMemoryEventStore;
-use eventcore_types::{CommandLogic, Event, EventStore, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{
+    CommandLogic, Event, EventStore, StreamId, StreamVersion, StreamWrites, collect_events,
+};
 
 /// Builder for Given-When-Then command tests.
 pub struct TestScenario {
@@ -28,12 +30,15 @@ impl TestScenario {
             return self;
         }
 
-        let reader = self
+        let stream = self
             .store
             .read_stream::<E>(stream_id.clone())
             .await
             .expect("reading stream for test setup should not fail");
-        let current_version = StreamVersion::new(reader.len());
+        let existing = collect_events(stream)
+            .await
+            .expect("collecting stream for test setup should not fail");
+        let current_version = StreamVersion::new(existing.len());
 
         let mut writes = StreamWrites::new()
             .register_stream(stream_id, current_version)

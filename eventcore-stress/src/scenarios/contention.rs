@@ -91,22 +91,28 @@ where
             let successes = Arc::clone(&success_count);
             move |_reported_successes| async move {
                 // Correctness: event count in the stream must equal successful ops
-                let reader = store
+                let opened = store
                     .read_stream::<crate::domain::BankAccountEvent>(StreamId::clone(&stream))
                     .await;
-                match reader {
-                    Ok(r) => {
-                        let event_count = r.len() as u64;
-                        let expected = successes.load(Ordering::Relaxed);
-                        if event_count != expected {
-                            eprintln!(
-                                "CORRECTNESS FAILURE: expected {expected} events, found {event_count}"
-                            );
-                            false
-                        } else {
-                            true
+                match opened {
+                    Ok(event_stream) => match eventcore::collect_events(event_stream).await {
+                        Ok(events) => {
+                            let event_count = events.len() as u64;
+                            let expected = successes.load(Ordering::Relaxed);
+                            if event_count != expected {
+                                eprintln!(
+                                    "CORRECTNESS FAILURE: expected {expected} events, found {event_count}"
+                                );
+                                false
+                            } else {
+                                true
+                            }
                         }
-                    }
+                        Err(e) => {
+                            eprintln!("Failed to read stream for correctness check: {e}");
+                            false
+                        }
+                    },
                     Err(e) => {
                         eprintln!("Failed to read stream for correctness check: {e}");
                         false

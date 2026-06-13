@@ -4,8 +4,8 @@
 //! for testing retry logic and conflict handling.
 
 use eventcore_types::{
-    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamId,
-    StreamVersion, StreamWrites,
+    Event, EventStore, EventStoreError, EventStream, EventStreamSlice, StreamId, StreamVersion,
+    StreamWrites,
 };
 
 /// A wrapper around an event store that injects a deterministic number
@@ -55,7 +55,7 @@ where
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         self.inner.read_stream(stream_id).await
     }
 

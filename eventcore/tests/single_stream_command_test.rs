@@ -1,6 +1,6 @@
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, NewEvents, RetryPolicy, StreamDeclarations,
-    StreamId, execute,
+    StreamId, collect_events, execute,
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_types::EventStore;
@@ -180,10 +180,11 @@ async fn main_success() {
         .expect("command execution to succeed");
 
     // And: Developer reads events from the account stream
-    let events = store
+    let stream = store
         .read_stream::<TestDomainEvents>(account_id.clone())
         .await
         .expect("reading a stream to succeed");
+    let events: Vec<TestDomainEvents> = collect_events(stream).await.expect("collecting events");
 
     // And: Developer accesses the first event
     let first_event = events.first().expect("at least one event to exist");
@@ -255,9 +256,10 @@ async fn insufficient_funds_returns_business_rule_violation() {
     );
 
     // And: No additional events were appended (only the original deposit remains)
-    let events = store
+    let stream = store
         .read_stream::<TestDomainEvents>(account_id)
         .await
         .expect("reading stream to succeed");
+    let events: Vec<TestDomainEvents> = collect_events(stream).await.expect("collecting events");
     assert_eq!(events.len(), 1, "failure should not append new events");
 }

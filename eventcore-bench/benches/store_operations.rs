@@ -7,7 +7,7 @@ mod fixtures;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use eventcore_memory::InMemoryEventStore;
-use eventcore_types::{EventStore, StreamVersion, StreamWrites};
+use eventcore_types::{EventStore, StreamVersion, StreamWrites, collect_events};
 use fixtures::{BankAccountEvent, new_stream_id, test_amount};
 use std::hint::black_box;
 
@@ -158,13 +158,16 @@ fn bench_read_stream(c: &mut Criterion) {
                         let sid = stream_id.clone();
                         let store_ref = &store;
                         async move {
-                            let reader = black_box(
-                                store_ref
-                                    .read_stream::<BankAccountEvent>(sid)
+                            let stream = store_ref
+                                .read_stream::<BankAccountEvent>(sid)
+                                .await
+                                .expect("read should succeed");
+                            let events = black_box(
+                                collect_events(stream)
                                     .await
-                                    .expect("read should succeed"),
+                                    .expect("collect should succeed"),
                             );
-                            let _len = black_box(reader.len());
+                            let _len = black_box(events.len());
                         }
                     });
                 },
@@ -184,13 +187,16 @@ fn bench_read_stream(c: &mut Criterion) {
                         let sid = stream_id.clone();
                         let store_ref = &store;
                         async move {
-                            let reader = black_box(
-                                store_ref
-                                    .read_stream::<BankAccountEvent>(sid)
+                            let stream = store_ref
+                                .read_stream::<BankAccountEvent>(sid)
+                                .await
+                                .expect("read should succeed");
+                            let events = black_box(
+                                collect_events(stream)
                                     .await
-                                    .expect("read should succeed"),
+                                    .expect("collect should succeed"),
                             );
-                            let _len = black_box(reader.len());
+                            let _len = black_box(events.len());
                         }
                     });
                 },
@@ -261,13 +267,16 @@ fn bench_read_stream_postgres(c: &mut Criterion) {
                     let sid = stream_id.clone();
                     let store_ref = &store;
                     async move {
-                        let reader = black_box(
-                            store_ref
-                                .read_stream::<BankAccountEvent>(sid)
+                        let stream = store_ref
+                            .read_stream::<BankAccountEvent>(sid)
+                            .await
+                            .expect("read should succeed");
+                        let events = black_box(
+                            collect_events(stream)
                                 .await
-                                .expect("read should succeed"),
+                                .expect("collect should succeed"),
                         );
-                        let _len = black_box(reader.len());
+                        let _len = black_box(events.len());
                     }
                 });
             },

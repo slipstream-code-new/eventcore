@@ -10,7 +10,7 @@
 //! This crate contains:
 //! - Core traits: `Event`, `EventStore`, `CommandLogic`, `CommandStreams`, `StreamResolver`
 //! - Domain types: `StreamId`, `StreamVersion`, `StreamWrites`, `StreamWriteEntry`
-//! - Event handling: `EventStreamReader`, `EventStreamSlice`, `NewEvents`
+//! - Event handling: `EventStream`, `collect_events`, `EventStreamSlice`, `NewEvents`
 //! - Command types: `StreamDeclarations`, `StreamDeclarationsError`
 //! - Errors: `EventStoreError`, `CommandError`, `Operation`
 
@@ -31,6 +31,6 @@ pub use projection::{
     MaxRetryAttempts, Projector, ProjectorCoordinator, RetryCount, StreamPosition,
 };
 pub use store::{
-    EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
-    StreamPattern, StreamPrefix, StreamVersion, StreamWriteEntry, StreamWrites,
+    EventStore, EventStoreError, EventStream, EventStreamSlice, Operation, StreamId, StreamPattern,
+    StreamPrefix, StreamVersion, StreamWriteEntry, StreamWrites, collect_events,
 };

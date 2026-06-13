@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use eventcore_types::{
     CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
+    EventStream, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
     StreamVersion, StreamWriteEntry, StreamWrites,
 };
 pub use rusqlite;
@@ -296,58 +296,101 @@ impl EventStore for SqliteEventStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         info!(
             stream = %stream_id,
             "[sqlite.read_stream] reading events from sqlite"
         );
 
+        // rusqlite is synchronous, so the actual row reads run on a blocking
+        // thread. To stream incrementally (rather than buffering every row in a
+        // Vec), that blocking task pushes each row's JSON over a bounded channel
+        // and the returned async stream consumes + deserializes one row at a
+        // time. Backpressure from the bounded channel keeps at most a few rows
+        // in flight. Deserialization into `E` happens on the async side so a
+        // per-row decode failure surfaces as an `Err` item (preserving the
+        // read_stream_errors_on_type_mismatch contract).
         let conn = self.conn.clone();
         let sid = stream_id.clone();
-        let rows = tokio::task::spawn_blocking(move || {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<String, EventStoreError>>(64);
+
+        let _read_task = tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            let mut stmt = conn
-                .prepare(
-                    "SELECT event_data FROM eventcore_events WHERE stream_id = ?1 ORDER BY stream_version ASC",
-                )
-                .map_err(|e| {
+            let mut stmt = match conn.prepare(
+                "SELECT event_data FROM eventcore_events WHERE stream_id = ?1 ORDER BY stream_version ASC",
+            ) {
+                Ok(stmt) => stmt,
+                Err(e) => {
                     error!(error = %e, "[sqlite.read_stream] prepare failed");
-                    EventStoreError::StoreFailure {
+                    let _ = tx.blocking_send(Err(EventStoreError::StoreFailure {
                         operation: Operation::ReadStream,
-                    }
-                })?;
-            let rows: Vec<String> = stmt
-                .query_map(params![sid.as_ref()], |row| row.get(0))
-                .map_err(|e| {
-                    error!(error = %e, "[sqlite.read_stream] query failed");
-                    EventStoreError::StoreFailure {
-                        operation: Operation::ReadStream,
-                    }
-                })?
-                .collect::<Result<Vec<String>, _>>()
-                .map_err(|e| {
-                    error!(error = %e, "[sqlite.read_stream] row extraction failed");
-                    EventStoreError::StoreFailure {
-                        operation: Operation::ReadStream,
-                    }
-                })?;
-            Ok::<Vec<String>, EventStoreError>(rows)
-        })
-        .await
-        .map_err(|e| map_join_error(e, Operation::ReadStream))??;
-
-        let mut events = Vec::with_capacity(rows.len());
-        for json_str in rows {
-            let event: E = serde_json::from_str(&json_str).map_err(|e| {
-                EventStoreError::DeserializationFailed {
-                    stream_id: stream_id.clone(),
-                    detail: e.to_string(),
+                    }));
+                    return;
                 }
-            })?;
-            events.push(event);
-        }
+            };
 
-        Ok(EventStreamReader::new(events))
+            let mut rows = match stmt.query(params![sid.as_ref()]) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    error!(error = %e, "[sqlite.read_stream] query failed");
+                    let _ = tx.blocking_send(Err(EventStoreError::StoreFailure {
+                        operation: Operation::ReadStream,
+                    }));
+                    return;
+                }
+            };
+
+            loop {
+                match rows.next() {
+                    Ok(Some(row)) => match row.get::<_, String>(0) {
+                        Ok(json) => {
+                            if tx.blocking_send(Ok(json)).is_err() {
+                                // Receiver dropped (consumer stopped early).
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!(error = %e, "[sqlite.read_stream] row extraction failed");
+                            let _ = tx.blocking_send(Err(EventStoreError::StoreFailure {
+                                operation: Operation::ReadStream,
+                            }));
+                            break;
+                        }
+                    },
+                    Ok(None) => break,
+                    Err(e) => {
+                        error!(error = %e, "[sqlite.read_stream] row iteration failed");
+                        let _ = tx.blocking_send(Err(EventStoreError::StoreFailure {
+                            operation: Operation::ReadStream,
+                        }));
+                        break;
+                    }
+                }
+            }
+        });
+
+        let stream = async_stream::stream! {
+            while let Some(item) = rx.recv().await {
+                match item {
+                    Ok(json) => match serde_json::from_str::<E>(&json) {
+                        Ok(event) => yield Ok(event),
+                        Err(e) => {
+                            yield Err(EventStoreError::DeserializationFailed {
+                                stream_id: stream_id.clone(),
+                                detail: e.to_string(),
+                            });
+                            break;
+                        }
+                    },
+                    Err(e) => {
+                        yield Err(e);
+                        break;
+                    }
+                }
+            }
+        };
+
+        Ok(EventStream::new(stream))
     }
 
     #[instrument(name = "sqlite.append_events", skip(self, writes))]

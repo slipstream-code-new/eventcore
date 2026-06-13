@@ -40,7 +40,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use eventcore_types::{
-    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStreamReader,
+    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStream,
     EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry,
     StreamWrites,
 };
@@ -145,29 +145,38 @@ impl EventStore for FileEventStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let index = self
-            .shared
-            .index
-            .read()
-            .map_err(|_| EventStoreError::StoreFailure {
-                operation: Operation::ReadStream,
-            })?;
-        let mut events: Vec<E> = Vec::new();
-        if let Some(stream) = index.streams.get(stream_id.as_ref()) {
-            for indexed in stream {
-                match serde_json::from_value::<E>(indexed.event_data.clone()) {
-                    Ok(event) => events.push(event),
-                    Err(error) => {
-                        return Err(EventStoreError::DeserializationFailed {
-                            stream_id: stream_id.clone(),
-                            detail: error.to_string(),
-                        });
-                    }
-                }
+    ) -> Result<EventStream<E>, EventStoreError> {
+        // Events live in an in-memory index behind an `RwLock`. We deserialize
+        // each indexed event into the requested type while holding the read
+        // guard (preserving read-time linearization order), then release the
+        // lock and yield the per-event results one at a time. A per-event
+        // decode failure surfaces as an `Err` item. The executor consumes the
+        // stream incrementally; only this local index is read up front.
+        let items: Vec<Result<E, EventStoreError>> = {
+            let index = self
+                .shared
+                .index
+                .read()
+                .map_err(|_| EventStoreError::StoreFailure {
+                    operation: Operation::ReadStream,
+                })?;
+            match index.streams.get(stream_id.as_ref()) {
+                None => Vec::new(),
+                Some(stream) => stream
+                    .iter()
+                    .map(|indexed| {
+                        serde_json::from_value::<E>(indexed.event_data.clone()).map_err(|error| {
+                            EventStoreError::DeserializationFailed {
+                                stream_id: stream_id.clone(),
+                                detail: error.to_string(),
+                            }
+                        })
+                    })
+                    .collect(),
             }
-        }
-        Ok(EventStreamReader::new(events))
+        };
+
+        Ok(EventStream::new(futures::stream::iter(items)))
     }
 
     async fn append_events(
@@ -602,6 +611,7 @@ impl FileEventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eventcore_types::collect_events;
     use serde::{Deserialize, Serialize};
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -729,11 +739,12 @@ mod tests {
             append_one(&store, &account, 1, "beta").await;
         }
         let reopened = FileEventStore::open(dir.path()).expect("reopen");
-        let reader = reopened
+        let stream = reopened
             .read_stream::<TestEvent>(account.clone())
             .await
             .expect("read");
-        let data: Vec<String> = reader.iter().map(|event| event.data.clone()).collect();
+        let events = collect_events(stream).await.expect("collect");
+        let data: Vec<String> = events.iter().map(|event| event.data.clone()).collect();
         assert_eq!(data, vec!["alpha".to_string(), "beta".to_string()]);
     }
 
@@ -759,11 +770,12 @@ mod tests {
         // A stray non-transaction file must not break the scan.
         fs::write(dir.path().join("events/README.txt"), "not a transaction").expect("write stray");
         let reopened = FileEventStore::open(dir.path()).expect("reopen ignores stray");
-        let reader = reopened
+        let stream = reopened
             .read_stream::<TestEvent>(account)
             .await
             .expect("read");
-        assert_eq!(reader.len(), 1);
+        let events = collect_events(stream).await.expect("collect");
+        assert_eq!(events.len(), 1);
     }
 
     #[tokio::test]

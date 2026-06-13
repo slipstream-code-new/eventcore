@@ -1,9 +1,12 @@
 use crate::command::Event;
 use crate::validation::{is_valid_glob_pattern, no_glob_metacharacters};
+use futures::Stream;
+use futures::stream::StreamExt;
 use nutype::nutype;
 use serde_json::value::RawValue;
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 
 /// Collection of events to write, organized by stream.
 ///
@@ -166,12 +169,18 @@ pub trait EventStore {
     ///
     /// # Returns
     ///
-    /// * `Ok(EventStreamReader<T>)` - Handle for reading events from the stream
-    /// * `Err(EventStoreError)` - If stream cannot be read
+    /// * `Ok(EventStream<T>)` - An async stream yielding each event in
+    ///   stream-version order. Opening the stream may fail up front (e.g.
+    ///   connection/setup); per-event decode failures surface as `Err` items
+    ///   yielded by the stream.
+    /// * `Err(EventStoreError)` - If the stream cannot be opened
+    ///
+    /// Callers that want the whole history materialized as a `Vec` should use
+    /// the [`collect_events`] convenience helper.
     fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> impl Future<Output = Result<EventStreamReader<E>, EventStoreError>> + Send;
+    ) -> impl Future<Output = Result<EventStream<E>, EventStoreError>> + Send;
 
     /// Atomically append events to multiple streams with optimistic concurrency control.
     ///
@@ -456,59 +465,65 @@ pub enum EventStoreError {
     },
 }
 
-/// Event stream reader generic over event payload type.
+/// An async stream of events read from a single stream, generic over the
+/// consumer's event payload type.
 ///
-/// EventStreamReader holds a deserialized sequence of events from a single stream.
-/// It provides iteration, length, and first-element access for state reconstruction
-/// during command execution.
-pub struct EventStreamReader<E: Event> {
-    events: Vec<E>,
+/// `EventStream` is a named newtype wrapper around a boxed, pinned
+/// [`futures::Stream`]. It yields each event in stream-version order (oldest to
+/// newest) without materializing the entire history in memory at once. Each
+/// item is a `Result<E, EventStoreError>` so that per-event decode failures can
+/// surface individually rather than aborting the whole read up front.
+///
+/// The executor folds these items into command state one at a time (the real
+/// memory win for large streams). Callers that genuinely want every event as a
+/// `Vec` should use [`collect_events`].
+pub struct EventStream<E: Event> {
+    inner: Pin<Box<dyn Stream<Item = Result<E, EventStoreError>> + Send>>,
 }
 
-impl<E: Event> EventStreamReader<E> {
-    pub fn new(events: Vec<E>) -> Self {
-        Self { events }
-    }
-
-    /// Returns the number of events in the stream.
-    pub fn len(&self) -> usize {
-        self.events.len()
-    }
-
-    /// Returns true if the stream contains no events.
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
-    }
-
-    /// Returns the first event in the stream, if any.
+impl<E: Event> EventStream<E> {
+    /// Construct an `EventStream` from any `Send` stream of decode results.
     ///
-    /// This is a convenience method for accessing the first event when
-    /// reconstructing state or validating command results.
-    ///
-    /// # Returns
-    ///
-    /// * `Some(&E)` - Reference to the first event in the stream
-    /// * `None` - If the stream is empty
-    pub fn first(&self) -> Option<&E> {
-        self.events.first()
-    }
-
-    /// Returns an iterator over the events for state reconstruction.
-    ///
-    /// Events are returned in stream version order (oldest to newest).
-    /// This is used by the executor to fold events into state via `CommandLogic::apply()`.
-    pub fn iter(&self) -> impl Iterator<Item = &E> {
-        self.events.iter()
+    /// Backends produce their per-event results (deserializing rows, downcasting
+    /// boxed events, etc.) and wrap the resulting stream here.
+    pub fn new(stream: impl Stream<Item = Result<E, EventStoreError>> + Send + 'static) -> Self {
+        Self {
+            inner: Box::pin(stream),
+        }
     }
 }
 
-impl<E: Event> IntoIterator for EventStreamReader<E> {
-    type Item = E;
-    type IntoIter = std::vec::IntoIter<E>;
+impl<E: Event> Stream for EventStream<E> {
+    type Item = Result<E, EventStoreError>;
 
-    fn into_iter(self) -> Self::IntoIter {
-        self.events.into_iter()
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
     }
+}
+
+/// Collect every event from a stream into a `Vec`, in stream-version order.
+///
+/// This is the convenience path for callers that genuinely want the whole
+/// history materialized at once (tests, small streams, ad-hoc inspection). The
+/// executor does NOT use this — it folds events incrementally as they arrive.
+///
+/// The first `Err` item encountered (e.g. a per-event decode failure) is
+/// returned immediately, matching the previous behavior where a single bad
+/// event failed the entire read.
+pub async fn collect_events<E, S>(stream: S) -> Result<Vec<E>, EventStoreError>
+where
+    E: Event,
+    S: Stream<Item = Result<E, EventStoreError>>,
+{
+    let mut stream = Box::pin(stream);
+    let mut events = Vec::new();
+    while let Some(item) = stream.next().await {
+        events.push(item?);
+    }
+    Ok(events)
 }
 
 /// Marker type returned by a successful `EventStore::append_events()` call.
@@ -530,7 +545,7 @@ impl<T: EventStore + Sync> EventStore for &T {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStream<E>, EventStoreError> {
         (*self).read_stream(stream_id).await
     }
 
@@ -762,9 +777,9 @@ mod tests {
         assert_eq!(v1, StreamVersion::new(6));
     }
 
-    #[test]
-    fn event_stream_reader_len_returns_event_count() {
-        let stream_id = StreamId::try_new("reader-len-test").expect("valid stream id");
+    #[tokio::test]
+    async fn collect_events_yields_all_events_in_order() {
+        let stream_id = StreamId::try_new("collect-order-test").expect("valid stream id");
         let events = vec![
             TestEvent {
                 stream_id: stream_id.clone(),
@@ -780,88 +795,53 @@ mod tests {
             },
         ];
 
-        let reader = EventStreamReader::new(events);
+        let stream = EventStream::new(futures::stream::iter(
+            events.clone().into_iter().map(Ok::<_, EventStoreError>),
+        ));
 
-        assert_eq!(reader.len(), 3);
-    }
-
-    #[test]
-    fn event_stream_reader_is_empty_returns_true_for_empty() {
-        let reader: EventStreamReader<TestEvent> = EventStreamReader::new(vec![]);
-
-        assert!(reader.is_empty());
-    }
-
-    #[test]
-    fn event_stream_reader_is_empty_returns_false_for_nonempty() {
-        let stream_id = StreamId::try_new("reader-nonempty-test").expect("valid stream id");
-        let events = vec![TestEvent {
-            stream_id: stream_id.clone(),
-            data: "event".to_string(),
-        }];
-
-        let reader = EventStreamReader::new(events);
-
-        assert!(!reader.is_empty());
-    }
-
-    #[test]
-    fn event_stream_reader_first_returns_first_event() {
-        let stream_id = StreamId::try_new("reader-first-test").expect("valid stream id");
-        let first_event = TestEvent {
-            stream_id: stream_id.clone(),
-            data: "first".to_string(),
-        };
-        let events = vec![
-            first_event.clone(),
-            TestEvent {
-                stream_id: stream_id.clone(),
-                data: "second".to_string(),
-            },
-        ];
-
-        let reader = EventStreamReader::new(events);
-
-        assert_eq!(reader.first(), Some(&first_event));
-    }
-
-    #[test]
-    fn event_stream_reader_iter_yields_all_events() {
-        let stream_id = StreamId::try_new("reader-iter-test").expect("valid stream id");
-        let events = vec![
-            TestEvent {
-                stream_id: stream_id.clone(),
-                data: "first".to_string(),
-            },
-            TestEvent {
-                stream_id: stream_id.clone(),
-                data: "second".to_string(),
-            },
-        ];
-
-        let reader = EventStreamReader::new(events.clone());
-        let collected: Vec<&TestEvent> = reader.iter().collect();
-
-        assert_eq!(collected, events.iter().collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn event_stream_reader_into_iter_yields_all_events() {
-        let stream_id = StreamId::try_new("reader-into-iter-test").expect("valid stream id");
-        let events = vec![
-            TestEvent {
-                stream_id: stream_id.clone(),
-                data: "first".to_string(),
-            },
-            TestEvent {
-                stream_id: stream_id.clone(),
-                data: "second".to_string(),
-            },
-        ];
-
-        let reader = EventStreamReader::new(events.clone());
-        let collected: Vec<TestEvent> = reader.into_iter().collect();
+        let collected = collect_events(stream)
+            .await
+            .expect("collect should succeed");
 
         assert_eq!(collected, events);
+    }
+
+    #[tokio::test]
+    async fn collect_events_returns_empty_for_empty_stream() {
+        let stream = EventStream::new(futures::stream::iter(Vec::<
+            Result<TestEvent, EventStoreError>,
+        >::new()));
+
+        let collected = collect_events(stream)
+            .await
+            .expect("collect should succeed");
+
+        assert!(collected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn collect_events_propagates_first_error_item() {
+        let stream_id = StreamId::try_new("collect-error-test").expect("valid stream id");
+        let items: Vec<Result<TestEvent, EventStoreError>> = vec![
+            Ok(TestEvent {
+                stream_id: stream_id.clone(),
+                data: "first".to_string(),
+            }),
+            Err(EventStoreError::DeserializationFailed {
+                stream_id: stream_id.clone(),
+                detail: "bad event".to_string(),
+            }),
+        ];
+
+        let stream = EventStream::new(futures::stream::iter(items));
+
+        let error = collect_events(stream)
+            .await
+            .expect_err("collect should surface the error item");
+
+        assert!(matches!(
+            error,
+            EventStoreError::DeserializationFailed { .. }
+        ));
     }
 }

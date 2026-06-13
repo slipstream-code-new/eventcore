@@ -116,6 +116,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "atoi"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -598,6 +620,7 @@ dependencies = [
  "eventcore-postgres",
  "eventcore-sqlite",
  "eventcore-types",
+ "futures",
  "nutype",
  "proptest",
  "rand 0.10.1",
@@ -668,6 +691,7 @@ dependencies = [
  "eventcore-testing",
  "eventcore-types",
  "fs4",
+ "futures",
  "nutype",
  "serde",
  "serde_json",
@@ -702,6 +726,7 @@ version = "0.9.0"
 dependencies = [
  "eventcore-testing",
  "eventcore-types",
+ "futures",
  "serde",
  "serde_json",
  "thiserror",
@@ -714,6 +739,7 @@ dependencies = [
 name = "eventcore-postgres"
 version = "0.9.0"
 dependencies = [
+ "async-stream",
  "eventcore-testing",
  "eventcore-types",
  "futures",
@@ -733,8 +759,10 @@ dependencies = [
 name = "eventcore-sqlite"
 version = "0.9.0"
 dependencies = [
+ "async-stream",
  "eventcore-testing",
  "eventcore-types",
+ "futures",
  "rusqlite",
  "serde",
  "serde_json",
@@ -773,6 +801,7 @@ dependencies = [
  "eventcore",
  "eventcore-memory",
  "eventcore-types",
+ "futures",
  "nutype",
  "rand 0.10.1",
  "serde",
@@ -785,12 +814,14 @@ dependencies = [
 name = "eventcore-types"
 version = "0.9.0"
 dependencies = [
+ "futures",
  "glob",
  "nutype",
  "proptest",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
@@ -2601,9 +2632,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.52.1"
+version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67dee974fe86fd92cc45b7a95fdd2f99a36a6d7b0d431a231178d3d670bbcc6"
+checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
 dependencies = [
  "bytes",
  "libc",

@@ -103,3 +103,4 @@ Jitter formula: `delay * (1.0 + (random - 0.5) * 0.4)` — produces [0.8x, 1.2x]
 - ADR-008: Retry logic with exponential backoff
 - ADR-009: Stream resolver design
 - ADR-014: Queue-based stream discovery algorithm
+- ADR-0049: Streaming reads — the executor folds each stream's events incrementally as they arrive (the pipeline pushes one `StoreEffectResult::StreamEvent` at a time; `event_count` becomes the stream's expected version)

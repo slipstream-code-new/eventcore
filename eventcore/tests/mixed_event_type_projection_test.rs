@@ -138,8 +138,7 @@ impl EventStore for TestBackend {
     fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> impl Future<Output = Result<eventcore_types::EventStreamReader<E>, EventStoreError>> + Send
-    {
+    ) -> impl Future<Output = Result<eventcore_types::EventStream<E>, EventStoreError>> + Send {
         self.event_store.read_stream(stream_id)
     }
 
