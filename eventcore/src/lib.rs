@@ -1,3 +1,135 @@
+//! # EventCore
+//!
+//! Type-safe, multi-stream event sourcing for Rust with dynamic consistency
+//! boundaries.
+//!
+//! EventCore lets a single command read from and atomically write to multiple
+//! event streams in one optimistic-concurrency-controlled transaction. You
+//! describe *what* a command does — which streams it touches, how it folds past
+//! events into state, and what new events it produces — and EventCore handles
+//! the infrastructure: loading state, detecting concurrent writes, retrying on
+//! conflict, and committing atomically.
+//!
+//! ## Core concepts
+//!
+//! - **Stream** — an ordered, append-only sequence of events identified by a
+//!   [`StreamId`]. Each stream has a version that increments with every append.
+//! - **Command** — a unit of business logic implementing [`CommandLogic`].
+//!   Its `apply` method folds events into command-local state (the *write
+//!   model*); its `handle` method validates business rules and returns the new
+//!   events to append. The streams a command may touch are declared with
+//!   `#[derive(Command)]` and the `#[stream]` attribute.
+//! - **[`execute`]** — the canonical entry point. It loads the declared
+//!   streams, folds them into state, calls `handle`, and atomically appends the
+//!   resulting events with optimistic concurrency control, retrying per the
+//!   supplied [`RetryPolicy`].
+//! - **Projection** — a *read model* built by replaying events. Implement
+//!   [`Projector`] and drive it with [`run_projection`]. Read models and write
+//!   models are kept on separate code paths.
+//!
+//! ## Quick start: your first command
+//!
+//! This example defines a `Deposit` command for a bank account, executes it
+//! against the in-memory store, and is fully runnable. Add `eventcore` and
+//! `eventcore-memory` to your `Cargo.toml`, then:
+//!
+//! ```
+//! use eventcore::{
+//!     execute, Command, CommandError, CommandLogic, Event, NewEvents, RetryPolicy, StreamId,
+//! };
+//! use eventcore_memory::InMemoryEventStore;
+//! use serde::{Deserialize, Serialize};
+//!
+//! // 1. Define your domain events. Each event knows which stream it belongs to.
+//! #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+//! enum BankAccountEvent {
+//!     MoneyDeposited { account_id: StreamId, amount: u32 },
+//! }
+//!
+//! impl Event for BankAccountEvent {
+//!     fn stream_id(&self) -> &StreamId {
+//!         match self {
+//!             BankAccountEvent::MoneyDeposited { account_id, .. } => account_id,
+//!         }
+//!     }
+//!     fn event_type_name() -> &'static str {
+//!         "BankAccountEvent"
+//!     }
+//! }
+//!
+//! // 2. Define a command. `#[derive(Command)]` generates the stream
+//! //    declarations from the `#[stream]`-tagged fields.
+//! #[derive(Command)]
+//! struct Deposit {
+//!     #[stream]
+//!     account_id: StreamId,
+//!     amount: u32,
+//! }
+//!
+//! // 3. Implement the business logic: how events fold into state (`apply`)
+//! //    and what events the command produces (`handle`).
+//! impl CommandLogic for Deposit {
+//!     type Event = BankAccountEvent;
+//!     type State = ();
+//!
+//!     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
+//!         state
+//!     }
+//!
+//!     fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+//!         Ok(vec![BankAccountEvent::MoneyDeposited {
+//!             account_id: self.account_id.clone(),
+//!             amount: self.amount,
+//!         }]
+//!         .into())
+//!     }
+//! }
+//!
+//! // 4. Execute the command against a store.
+//! # fn main() {
+//! let rt = tokio::runtime::Runtime::new().expect("runtime");
+//! rt.block_on(async {
+//!     let store = InMemoryEventStore::new();
+//!     let account_id = StreamId::try_new("account-42").expect("valid stream id");
+//!
+//!     let command = Deposit { account_id, amount: 100 };
+//!     execute(&store, command, RetryPolicy::new())
+//!         .await
+//!         .expect("deposit to succeed");
+//! });
+//! # }
+//! ```
+//!
+//! From here, see the [user manual](https://git.johnwilger.com/Slipstream/eventcore)
+//! for projections, multi-stream atomicity, and backend selection, or the
+//! `eventcore-demo` crate for a complete bank application backed by PostgreSQL.
+//!
+//! ## Reading events directly
+//!
+//! Most applications never read events by hand — [`execute`] does it for you.
+//! When you do need a stream's raw history (for tooling or a projection),
+//! [`EventStore::read_stream`](eventcore_types::EventStore::read_stream)
+//! returns a lazy [`EventStream`], an async `Stream` of events. To materialize
+//! the whole history into a `Vec`, pass it to the [`collect_events`] helper.
+//!
+//! ## Backends
+//!
+//! EventCore ships several [`EventStore`](eventcore_types::EventStore)
+//! implementations behind feature flags:
+//!
+//! - `eventcore-memory` — zero-dependency in-memory store for tests and
+//!   examples (used in the quick start above).
+//! - `postgres` feature — PostgreSQL backend with ACID transactions.
+//! - `sqlite` feature — SQLite backend with optional SQLCipher encryption.
+//!
+//! ## Error handling
+//!
+//! - [`CommandError`] is returned by [`execute`] — business-rule violations,
+//!   concurrency conflicts (after retries are exhausted), and store failures.
+//! - `EventStoreError` (in `eventcore-types`) is returned by backend
+//!   operations, including version conflicts and event deserialization
+//!   failures.
+
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;

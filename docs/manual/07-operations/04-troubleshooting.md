@@ -22,7 +22,7 @@ This chapter provides comprehensive troubleshooting guidance for EventCore appli
 async fn debug_command_execution<C: CommandLogic>(
     command: C,
     store: &impl EventStore,
-) -> Result<ExecutionResult, CommandError> {
+) -> Result<ExecutionResponse, CommandError> {
     let start = std::time::Instant::now();
 
     tracing::debug!(
@@ -116,16 +116,19 @@ async fn debug_command_execution<C: CommandLogic>(
        command: C,
        store: &impl EventStore,
        max_retries: u32,
-   ) -> Result<ExecutionResult, CommandError> {
+   ) -> Result<ExecutionResponse, CommandError> {
+       // RetryPolicy::new() with zero retries disables EventCore's built-in
+       // retry so this outer loop owns the retry behavior.
+       let no_retry = RetryPolicy::new().max_retries(0);
        let mut retry_count = 0;
 
        loop {
-           match execute(store, command.clone(), RetryPolicy::none()).await {
+           match execute(store, command.clone(), no_retry.clone()).await {
                Ok(result) => return Ok(result),
-               Err(CommandError::ConcurrencyConflict(streams)) => {
+               Err(CommandError::ConcurrencyError(attempts)) => {
                    retry_count += 1;
                    if retry_count >= max_retries {
-                       return Err(CommandError::ConcurrencyConflict(streams));
+                       return Err(CommandError::ConcurrencyError(attempts));
                    }
 
                    // Exponential backoff
@@ -135,7 +138,7 @@ async fn debug_command_execution<C: CommandLogic>(
                    tracing::warn!(
                        retry_attempt = retry_count,
                        delay_ms = delay.as_millis(),
-                       conflicting_streams = ?streams,
+                       inner_attempts = attempts,
                        "Retrying command due to concurrency conflict"
                    );
                }
@@ -837,7 +840,7 @@ pub async fn execute_with_tracing<C: CommandLogic>(
     command: C,
     store: &impl EventStore,
     tracer: &CommandTracer,
-) -> Result<ExecutionResult, CommandError> {
+) -> Result<ExecutionResponse, CommandError> {
     let trace_id = tracer.start_trace(command);
 
     // Phase 1: Stream Reading

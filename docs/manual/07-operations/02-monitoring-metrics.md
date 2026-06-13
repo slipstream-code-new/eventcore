@@ -224,7 +224,7 @@ pub async fn execute_instrumented<C: CommandLogic>(
     command: C,
     policy: RetryPolicy,
     metrics: &MetricsService,
-) -> Result<ExecutionResult, CommandError> {
+) -> Result<ExecutionResponse, CommandError> {
     let start = Instant::now();
     let command_type = std::any::type_name::<C>();
 
@@ -289,7 +289,7 @@ pub fn init_logging(log_level: &str, log_format: &str) -> Result<(), Box<dyn std
 pub async fn execute_command_with_logging<C: CommandLogic>(
     command: C,
     store: &impl EventStore,
-) -> Result<ExecutionResult, CommandError> {
+) -> Result<ExecutionResponse, CommandError> {
     debug!("Starting command execution");
 
     let result = execute(store, command, RetryPolicy::new()).await;
@@ -456,7 +456,7 @@ pub fn init_tracing(service_name: &str, otlp_endpoint: &str) -> Result<(), Trace
 pub async fn execute_command_traced<C: CommandLogic>(
     command: C,
     store: &impl EventStore,
-) -> Result<ExecutionResult, CommandError> {
+) -> Result<ExecutionResponse, CommandError> {
     let span = tracing::Span::current();
     span.record("command.type", std::any::type_name::<C>());
 

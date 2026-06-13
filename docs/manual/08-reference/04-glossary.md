@@ -74,7 +74,7 @@ A UUIDv7 identifier for events that provides both uniqueness and chronological o
 
 A monotonically increasing number representing the position of an event within its stream, starting from 0.
 
-### ExecutionResult
+### ExecutionResponse
 
 The result of executing a command, containing information about events written, affected streams, and execution metadata.
 

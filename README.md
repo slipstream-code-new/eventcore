@@ -23,16 +23,24 @@ Traditional event sourcing forces you into rigid aggregate boundaries. EventCore
 
 ## Quick Start
 
-> **Note:** The following is a design vision, not current reality. Packages are not yet published.
+> **Note:** EventCore is not yet published to crates.io (see the banner above).
+> The snippet below shows how dependencies will be declared and matches the
+> current API.
 
 ```toml
-# Cargo.toml (EXAMPLE - not yet available on crates.io)
+# Cargo.toml
 [dependencies]
-eventcore = { version = "0.6", features = ["memory"] }
+eventcore = "0.9"
+# The in-memory store used below is a separate crate:
+eventcore-memory = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 ```
+
+The in-memory store lives in the `eventcore-memory` crate. The PostgreSQL and
+SQLite backends are enabled via the `postgres` and `sqlite` features on the
+`eventcore` crate.
 
 ```rust
 use eventcore::{

@@ -329,6 +329,35 @@ new events. EventCore's projection system handles checkpointing and
 resumption automatically. See the `projection-system` blueprint and
 ADR-0036 for details on the continuous polling architecture.
 
+## Filtering Which Events a Reader Sees
+
+When reading events through the `EventReader` path (the cursor-based path that
+backs projection runners and subscriptions), you can narrow the set of streams
+with an `EventFilter` from `eventcore-types`:
+
+```rust,ignore
+use eventcore_types::{EventFilter, StreamPrefix, StreamPattern};
+
+// Match every event in the store.
+let all = EventFilter::all();
+
+// Match streams whose ID starts with a literal prefix.
+let prefix = EventFilter::prefix(StreamPrefix::try_new("account-")?);
+
+// Match streams whose ID matches a POSIX glob pattern (`*`, `?`, `[...]`).
+// `StreamPattern` supports glob metacharacters; `StreamPrefix` rejects them.
+let pattern = EventFilter::pattern(StreamPattern::try_new("account-*")?);
+
+// Optionally restrict to a single event type as well.
+let typed = EventFilter::pattern(StreamPattern::try_new("order-*")?)
+    .with_event_type("OrderPlaced".to_string());
+```
+
+Glob pattern filtering (`EventFilter::pattern` + `StreamPattern`) was added in
+ADR-0047; literal prefix filtering remains available via `EventFilter::prefix`.
+`EventFilter` lives in `eventcore-types` because it is part of the
+reader/backend contract rather than the command-execution surface.
+
 ## Rebuilding Projections
 
 One of the powerful features of event sourcing is the ability to rebuild

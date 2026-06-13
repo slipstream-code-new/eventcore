@@ -188,97 +188,46 @@ use eventcore::{execute, RetryPolicy};
 let result = execute(&store, command, RetryPolicy::new()).await?;
 ```
 
-#### RetryConfig
+#### RetryPolicy
 
-Configuration for command retry behavior.
+`RetryPolicy` controls how `execute()` retries optimistic-concurrency conflicts.
+It is a builder-style struct, not an enum: construct it with `RetryPolicy::new()`
+and refine it with `max_retries` and `backoff_strategy`.
 
 ```rust
-#[derive(Debug, Clone)]
-pub struct RetryConfig {
-    /// Maximum number of retry attempts
-    pub max_attempts: u32,
+use eventcore::{BackoffStrategy, DelayMilliseconds, RetryPolicy};
 
-    /// Initial delay before first retry
-    pub initial_delay: Duration,
+// Default: retries with exponential backoff and a 10ms base delay.
+let default = RetryPolicy::new();
 
-    /// Maximum delay between retries
-    pub max_delay: Duration,
+// Disable retries entirely (the outer caller owns retry behavior).
+let no_retry = RetryPolicy::new().max_retries(0);
 
-    /// Multiplier for exponential backoff
-    pub backoff_multiplier: f64,
+// Fixed backoff for rate-limited backends.
+let fixed = RetryPolicy::new()
+    .max_retries(5)
+    .backoff_strategy(BackoffStrategy::Fixed {
+        delay: DelayMilliseconds::new(100),
+    });
 
-    /// Which types of errors to retry
-    pub retry_policy: RetryPolicy,
-
-    /// Add jitter to prevent thundering herd
-    pub jitter: bool,
-}
-
-impl RetryConfig {
-    pub fn none() -> Self {
-        Self {
-            max_attempts: 0,
-            ..Default::default()
-        }
-    }
-
-    pub fn aggressive() -> Self {
-        Self {
-            max_attempts: 10,
-            initial_delay: Duration::from_millis(10),
-            max_delay: Duration::from_secs(5),
-            backoff_multiplier: 1.5,
-            retry_policy: RetryPolicy::All,
-            jitter: true,
-        }
-    }
-
-    pub fn conservative() -> Self {
-        Self {
-            max_attempts: 3,
-            initial_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(2),
-            backoff_multiplier: 2.0,
-            retry_policy: RetryPolicy::ConcurrencyConflictsOnly,
-            jitter: true,
-        }
-    }
-}
-
-impl Default for RetryConfig {
-    fn default() -> Self {
-        Self {
-            max_attempts: 5,
-            initial_delay: Duration::from_millis(50),
-            max_delay: Duration::from_secs(1),
-            backoff_multiplier: 2.0,
-            retry_policy: RetryPolicy::TransientErrorsOnly,
-            jitter: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum RetryPolicy {
-    /// Never retry
-    None,
-
-    /// Only retry concurrency conflicts
-    ConcurrencyConflictsOnly,
-
-    /// Only retry transient errors (connection issues, timeouts)
-    TransientErrorsOnly,
-
-    /// Retry all retryable errors
-    All,
-}
+// Exponential backoff (base delay doubled per attempt) for high-traffic systems.
+let exponential = RetryPolicy::new()
+    .max_retries(3)
+    .backoff_strategy(BackoffStrategy::Exponential {
+        base_delay: DelayMilliseconds::new(10),
+    });
 ```
 
-**Retry Policy Guidelines:**
+`BackoffStrategy` has two variants:
 
-- **ConcurrencyConflictsOnly**: Use for high-conflict scenarios where immediate retry is beneficial
-- **TransientErrorsOnly**: Use for stable systems where business logic errors shouldn't be retried
-- **All**: Use for development or systems where any failure might be recoverable
+- **`Fixed { delay }`** — the same delay between every retry attempt;
+  predictable timing for rate-limited APIs.
+- **`Exponential { base_delay }`** — `base_delay * 2^attempt`; reduces load
+  during high-traffic periods (the default).
+
+EventCore retries optimistic-concurrency conflicts only; business-rule
+violations and other errors surface immediately without retrying. When retries
+are exhausted, `execute()` returns `CommandError::ConcurrencyError(attempts)`.
 
 #### TimeoutConfig
 

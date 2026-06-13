@@ -646,7 +646,7 @@ impl<S: EventStore> DistributedExecutor<S> {
         &self,
         command: C,
         parent_context: Option<SpanContext>,
-    ) -> Result<ExecutionResult, CommandError> {
+    ) -> Result<ExecutionResponse, CommandError> {
         let span = self.tracer
             .span_builder(format!("execute_command_{}", std::any::type_name::<C>()))
             .with_kind(SpanKind::Internal)

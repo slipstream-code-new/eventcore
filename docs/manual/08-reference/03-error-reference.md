@@ -1,202 +1,235 @@
-# Chapter 7.3: Error Reference
+# Chapter 8.3: Error Reference
 
-This chapter provides a comprehensive reference for all EventCore error types, error codes, and troubleshooting guidance. Use this reference to understand and resolve errors in your EventCore applications.
-
-## Error Categories
-
-EventCore errors are organized into several categories based on their origin and nature:
-
-1. **Command Errors** - Errors during command execution
-2. **Event Store Errors** - Errors from event store operations
-3. **Projection Errors** - Errors in projection processing
-4. **Validation Errors** - Input validation failures
-5. **Configuration Errors** - Configuration and setup issues
-6. **Network Errors** - Network and connectivity issues
-7. **Serialization Errors** - Data serialization/deserialization issues
+This chapter is a comprehensive reference for the error types EventCore
+actually returns. The two error types a downstream consumer encounters are
+`CommandError` (returned by `execute()`) and `EventStoreError` (returned by
+backend operations and wrapped inside `CommandError`). Both derive
+`thiserror::Error` and use machine-readable, kebab-case-style messages.
 
 ## Command Errors
 
-### CommandError
+### `CommandError`
 
-The primary error type for command execution failures.
+`execute()` returns `Result<ExecutionResponse, CommandError>`. `CommandError`
+has exactly four variants:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
-    #[error("Validation failed: {message}")]
-    ValidationFailed { message: String },
+    /// A business rule was violated. Wraps the command's own typed error
+    /// (any `std::error::Error + Send + Sync`). This is what the `require!`
+    /// macro produces and what your command's typed error enum converts into.
+    #[error(transparent)]
+    BusinessRuleViolation(Box<dyn std::error::Error + Send + Sync>),
 
-    #[error("Business rule violation: {rule} - {message}")]
-    BusinessRuleViolation { rule: String, message: String },
+    /// Optimistic concurrency conflicts persisted after the retry policy was
+    /// exhausted. The `u32` is the number of retry attempts that were made.
+    #[error("concurrency conflict after {0} retry attempts")]
+    ConcurrencyError(u32),
 
-    #[error("Concurrency conflict on streams: {streams:?}")]
-    ConcurrencyConflict { streams: Vec<StreamId> },
+    /// The underlying event store failed (read or append). Wraps the
+    /// `EventStoreError` that caused it.
+    #[error("event store error: {0}")]
+    EventStoreError(EventStoreError),
 
-    #[error("Stream not found: {stream_id}")]
-    StreamNotFound { stream_id: StreamId },
-
-    #[error("Unauthorized: {permission}")]
-    Unauthorized { permission: String },
-
-    #[error("Timeout after {duration:?}")]
-    Timeout { duration: Duration },
-
-    #[error("Stream access denied: cannot write to {stream_id}")]
-    StreamAccessDenied { stream_id: StreamId },
-
-    #[error("Maximum discovery iterations exceeded: {iterations}")]
-    MaxIterationsExceeded { iterations: usize },
-
-    #[error("Event store error: {source}")]
-    EventStoreError {
-        #[from]
-        source: EventStoreError
-    },
-
-    #[error("Serialization error: {message}")]
-    SerializationError { message: String },
-
-    #[error("Internal error: {message}")]
-    InternalError { message: String },
+    /// A validation error surfaced during execution.
+    #[error("validation error: {0}")]
+    ValidationError(String),
 }
 ```
 
-#### Error Codes and Solutions
+#### `BusinessRuleViolation`
 
-**CE001: ValidationFailed**
-
-```
-Error: Validation failed: StreamId cannot be empty
-Code: CE001
+```text
+Error: insufficient funds for account account-123: balance=50, attempted_withdrawal=100
 ```
 
-**Cause:** Input validation failed during command construction or execution.
-**Solution:**
+**Cause:** Your command's `handle()` rejected the operation. This is the normal
+way to signal that a domain precondition was not met — produced either by the
+`require!` macro or by returning your own typed error (which converts into
+`CommandError::BusinessRuleViolation` via its `From` impl).
 
-- Check input parameters for correct format and constraints
-- Ensure all required fields are provided
-- Verify string lengths and format requirements
+**Resolution:**
 
-**CE002: BusinessRuleViolation**
-
-```
-Error: Business rule violation: insufficient_balance - Account balance $100.00 is less than transfer amount $150.00
-Code: CE002
-```
-
-**Cause:** Business logic constraints were violated.
-**Solution:**
-
-- Review business rules and ensure command logic respects them
-- Check application state before executing commands
-- Implement proper validation in command handlers
-
-**CE003: ConcurrencyConflict**
-
-```
-Error: Concurrency conflict on streams: ["account-123", "account-456"]
-Code: CE003
-```
-
-**Cause:** Multiple commands attempted to modify the same streams simultaneously.
-**Solution:**
-
-- Implement retry logic with exponential backoff
-- Consider command design to reduce conflicts
-- Use optimistic concurrency control patterns
-
-**CE004: StreamNotFound**
-
-```
-Error: Stream not found: account-nonexistent
-Code: CE004
-```
-
-**Cause:** Command attempted to read from a stream that doesn't exist.
-**Solution:**
-
-- Verify stream IDs are correct
-- Check if the resource exists before referencing it
-- Implement proper error handling for missing resources
-
-**CE005: Unauthorized**
-
-```
-Error: Unauthorized: write_account_events
-Code: CE005
-```
-
-**Cause:** Insufficient permissions to execute the command.
-**Solution:**
-
-- Verify user authentication and authorization
-- Check role-based access control configuration
-- Ensure proper security context is set
-
-**CE006: Timeout**
-
-```
-Error: Timeout after 30s
-Code: CE006
-```
-
-**Cause:** Command execution exceeded configured timeout.
-**Solution:**
-
-- Check system performance and database connectivity
-- Increase timeout configuration if appropriate
-- Optimize command logic and database queries
-
-**CE007: StreamAccessDenied**
-
-```
-Error: Stream access denied: cannot write to protected-stream-123
-Code: CE007
-```
-
-**Cause:** Command attempted to write to a stream it didn't declare.
-**Solution:**
-
-- Ensure the command declares the stream via its `stream_declarations()` (generated by `#[derive(Command)]`) or otherwise includes the stream in its `StreamDeclarations` value
-- Verify command design follows EventCore stream access patterns
-- Check for typos in stream ID generation
-
-**CE008: MaxIterationsExceeded**
-
-```
-Error: Maximum discovery iterations exceeded: 10
-Code: CE008
-```
-
-**Cause:** Stream discovery loop exceeded configured maximum iterations.
-**Solution:**
-
-- Review command logic for potential infinite discovery loops
-- Increase `max_discovery_iterations` if legitimate
-- Optimize stream discovery patterns
-
-### Command Execution Flow Errors
-
-These errors occur during specific phases of command execution:
+- This is expected control flow, not a bug. Match on the variant and surface a
+  meaningful message to the caller.
+- To recover the original typed error, downcast the boxed error or match on its
+  `Display` output.
+- Define a typed error enum per command (see
+  `.claude/rules/thiserror-for-errors.md` convention) rather than ad-hoc
+  strings.
 
 ```rust
-#[derive(Debug, thiserror::Error)]
-pub enum ExecutionPhaseError {
-    #[error("Stream reading failed: {message}")]
-    StreamReadError { message: String },
-
-    #[error("State reconstruction failed: {message}")]
-    StateReconstructionError { message: String },
-
-    #[error("Command handling failed: {message}")]
-    CommandHandlingError { message: String },
-
-    #[error("Event writing failed: {message}")]
-    EventWritingError { message: String },
-
-    #[error("Stream discovery failed: {message}")]
-    StreamDiscoveryError { message: String },
+match execute(&store, command, RetryPolicy::new()).await {
+    Ok(response) => { /* ... */ }
+    Err(CommandError::BusinessRuleViolation(err)) => {
+        eprintln!("rejected: {err}");
+    }
+    Err(other) => return Err(other),
 }
 ```
 
-... (rest of file unchanged)
+#### `ConcurrencyError`
+
+```text
+Error: concurrency conflict after 3 retry attempts
+```
+
+**Cause:** Another writer modified one of the command's streams between the read
+and the append, and the conflict was still present after every retry the
+`RetryPolicy` allowed. EventCore retries optimistic-concurrency conflicts
+automatically; this variant means retries were exhausted.
+
+**Resolution:**
+
+- Increase `RetryPolicy::max_retries` or widen the backoff for hot streams.
+- Reduce contention by narrowing the streams a command declares, so unrelated
+  writes do not conflict.
+- If the conflict is legitimate (a genuine race the user should resolve), surface
+  it to the caller for a retry-or-cancel decision.
+
+#### `EventStoreError`
+
+```text
+Error: event store error: version conflict on stream account-123: expected version 4, found 5
+```
+
+**Cause:** A backend operation failed. The wrapped `EventStoreError` (see
+below) carries the specific failure.
+
+**Resolution:** Inspect the inner `EventStoreError` variant and follow its
+guidance.
+
+#### `ValidationError`
+
+```text
+Error: validation error: <detail>
+```
+
+**Cause:** A validation failure surfaced during execution that is not a
+domain business-rule violation.
+
+**Resolution:** Validate inputs at the boundary (parse-don't-validate) so domain
+types are always valid by construction; this variant should be rare in
+well-typed code.
+
+## Event Store Errors
+
+### `EventStoreError`
+
+Returned by `EventStore::read_stream`, `EventStore::append_events`, and the
+`StreamWrites` builder. It is also wrapped by `CommandError::EventStoreError`.
+
+```rust
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum EventStoreError {
+    /// The same stream was registered twice with different expected versions
+    /// when building a `StreamWrites` value.
+    ConflictingExpectedVersions { /* stream_id, ... */ },
+
+    /// A write targeted a stream that was never registered with an expected
+    /// version. Register every target stream before appending.
+    #[error("stream {stream_id} must be registered before appending events")]
+    UndeclaredStream { stream_id: StreamId },
+
+    /// Serializing an event for storage failed.
+    #[error("failed to serialize event for stream {stream_id}: {detail}")]
+    SerializationFailed { stream_id: StreamId, detail: String },
+
+    /// Decoding a stored event back into your domain type failed.
+    #[error("failed to deserialize event for stream {stream_id}: {detail}")]
+    DeserializationFailed { stream_id: StreamId, detail: String },
+
+    /// A backend operation (connection, query, transaction) failed.
+    #[error("{operation} operation failed")]
+    StoreFailure { operation: Operation },
+
+    /// Optimistic concurrency: the stream's actual version did not match the
+    /// expected version supplied with the write.
+    #[error("version conflict on stream {stream_id}: expected version {expected}, found {actual}")]
+    VersionConflict { /* stream_id, expected, actual */ },
+}
+```
+
+#### `VersionConflict`
+
+**Cause:** The expected version supplied with a write no longer matches the
+stream's current version — a concurrent writer got there first. Inside
+`execute()`, this drives the automatic retry loop; you only observe it directly
+when calling `append_events` yourself.
+
+**Resolution:** Reload state, re-validate, and retry. When using `execute()`,
+this is handled for you — a persistent conflict surfaces as
+`CommandError::ConcurrencyError`.
+
+#### `UndeclaredStream`
+
+**Cause:** A command (or manual `StreamWrites` builder) tried to append to a
+stream it never declared. Every stream a command writes must be declared via
+`#[stream]` fields (`#[derive(Command)]` generates the declarations) or
+registered with `StreamWrites::register_stream`.
+
+**Resolution:**
+
+- Add the stream to the command's `#[stream]`-tagged fields.
+- For dynamic streams discovered during `handle()`, declare them through the
+  `StreamResolver` so EventCore loads and locks them before the append.
+
+#### `DeserializationFailed`
+
+**Cause:** A stored event could not be decoded into the requested domain type.
+Usually a schema-evolution problem: an event was written with one shape and is
+being read with an incompatible one.
+
+**Resolution:**
+
+- Add `#[serde(default)]` for newly added optional fields so old events still
+  decode (see [Chapter 5.1: Schema Evolution](../05-advanced-topics/01-schema-evolution.md)).
+- For non-backwards-compatible changes, use event upcasting (see
+  [Chapter 5.2: Event Versioning](../05-advanced-topics/02-event-versioning.md)).
+
+#### `SerializationFailed`
+
+**Cause:** An event could not be serialized for storage. Almost always a bug in
+a custom `Serialize` impl or a non-serializable field.
+
+**Resolution:** Ensure every event type derives `Serialize`/`Deserialize` and
+contains only serializable fields.
+
+#### `StoreFailure`
+
+**Cause:** The backend (PostgreSQL, SQLite, file store) failed to complete an
+operation — connectivity, transaction, or I/O. The `Operation` enum records
+which operation failed.
+
+**Resolution:**
+
+- Verify backend connectivity and configuration (connection string, file
+  permissions, disk space).
+- Retry transient failures at the application layer.
+- See [Chapter 7.4: Troubleshooting](../07-operations/04-troubleshooting.md) for
+  backend-specific diagnostics.
+
+#### `ConflictingExpectedVersions`
+
+**Cause:** While building a `StreamWrites` value, the same stream was registered
+twice with different expected versions.
+
+**Resolution:** Register each stream once with a single expected version.
+
+## Projection Errors
+
+`run_projection()` returns `Result<(), ProjectionError>`. A projector's own
+`on_error()` callback decides whether a per-event failure is retried or fatal
+(via `FailureStrategy`); see
+[Chapter 2.4: Projections](../02-getting-started/04-projections.md) and the
+`Projector` trait documentation.
+
+## See Also
+
+- [Chapter 3.5: Error Handling](../03-core-concepts/05-error-handling.md) —
+  patterns for handling errors in command logic.
+- [Chapter 7.4: Troubleshooting](../07-operations/04-troubleshooting.md) —
+  operational diagnosis of production issues.
+- API docs: run `cargo doc -p eventcore --open` for the rendered rustdoc of
+  `CommandError`, `EventStoreError`, and the rest of the public surface.
