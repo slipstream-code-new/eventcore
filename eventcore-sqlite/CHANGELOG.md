@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v1.0.0...eventcore-sqlite-v1.0.1) - 2026-06-14
+
+### Documentation
+
+- overhaul API documentation across all crates ([#420](https://git.johnwilger.com/Slipstream/eventcore/pulls/420))
+
 ## [1.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v0.9.0...eventcore-sqlite-v1.0.0) - 2026-06-13
 
 ### Features
