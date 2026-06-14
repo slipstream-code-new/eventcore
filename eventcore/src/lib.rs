@@ -124,8 +124,12 @@
 //!
 //! ## Error handling
 //!
-//! - [`CommandError`] is returned by [`execute`] — business-rule violations,
-//!   concurrency conflicts (after retries are exhausted), and store failures.
+//! - [`execute`] returns `Ok(`[`ExecutionResponse`]`)` on success; the
+//!   response exposes [`ExecutionResponse::attempts`] so callers can observe
+//!   how many retries occurred.
+//! - [`CommandError`] is returned by [`execute`] on failure — business-rule
+//!   violations, concurrency conflicts (after retries are exhausted), and
+//!   store failures.
 //! - `EventStoreError` (in `eventcore-types`) is returned by backend
 //!   operations, including version conflicts and event deserialization
 //!   failures.
@@ -233,8 +237,11 @@ macro_rules! require {
 ///
 /// This type is returned when a command completes successfully, including
 /// state reconstruction, business rule validation, and atomic event persistence.
-/// The specific data included in this response is yet to be determined based
-/// on actual usage requirements.
+/// The result of a successful [`execute`] call.
+///
+/// Contains metadata about the execution, most notably how many attempts
+/// were needed before the command was committed (1 on first success,
+/// higher if optimistic-concurrency retries occurred).
 #[derive(Debug)]
 pub struct ExecutionResponse {
     attempts: NonZeroU32,
@@ -245,6 +252,10 @@ impl ExecutionResponse {
         Self { attempts }
     }
 
+    /// Returns the number of execution attempts made before the command committed.
+    ///
+    /// A value of `1` means the command succeeded on the first try. Values greater
+    /// than `1` indicate that optimistic-concurrency conflicts triggered retries.
     pub fn attempts(&self) -> u32 {
         self.attempts.get()
     }

@@ -8,11 +8,16 @@
 //! # Overview
 //!
 //! This crate contains:
-//! - Core traits: `Event`, `EventStore`, `CommandLogic`, `CommandStreams`, `StreamResolver`
-//! - Domain types: `StreamId`, `StreamVersion`, `StreamWrites`, `StreamWriteEntry`
-//! - Event handling: `EventStream`, `collect_events`, `EventStreamSlice`, `NewEvents`
-//! - Command types: `StreamDeclarations`, `StreamDeclarationsError`
-//! - Errors: `EventStoreError`, `CommandError`, `Operation`
+//! - **Command traits**: `CommandLogic`, `CommandStreams`, `StreamResolver`, `Event`, `NewEvents`
+//! - **Command types**: `StreamDeclarations`, `StreamDeclarationsError`
+//! - **Store trait**: `EventStore`, with `EventStoreError` and `Operation`
+//! - **Stream types**: `StreamId`, `StreamVersion`, `StreamWrites`, `StreamWriteEntry`,
+//!   `StreamPattern`, `StreamPrefix`
+//! - **Event streaming**: `EventStream`, `EventStreamSlice`, `collect_events`
+//! - **Projection traits**: `Projector`, `EventReader`, `CheckpointStore`, `ProjectorCoordinator`
+//! - **Projection types**: `EventFilter`, `EventPage`, `StreamPosition`, `FailureContext`,
+//!   `FailureStrategy`, `MaxRetries`, `BatchSize`, `DelayMilliseconds`, `BackoffMultiplier`
+//! - **Errors**: `CommandError`, `BusinessRuleMessage`
 
 mod command;
 mod errors;
