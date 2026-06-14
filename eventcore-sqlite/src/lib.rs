@@ -1,3 +1,18 @@
+//! SQLite event store backend for EventCore.
+//!
+//! This crate provides a lightweight, file-based [`SqliteEventStore`] suitable
+//! for testing, development, and single-machine deployments.
+//!
+//! Optional SQLCipher encryption is supported via the `encryption_key` field
+//! in [`SqliteConfig`]. When an encryption key is provided, the database file
+//! is encrypted at rest using SQLCipher.
+//!
+//! `SqliteEventStore` implements `EventStore`, `EventReader`, `CheckpointStore`,
+//! and projector coordination from `eventcore-types`.
+//!
+//! Construct a store using [`SqliteEventStore::from_connection`] with a
+//! `rusqlite::Connection`. Use `:memory:` for in-memory stores in tests.
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,6 +34,7 @@ use uuid::Uuid;
 // Error types
 // ---------------------------------------------------------------------------
 
+/// Errors that can occur when creating or using a [`SqliteEventStore`].
 #[derive(Debug, Error)]
 pub enum SqliteEventStoreError {
     #[error("failed to open SQLite connection: {0}")]
@@ -31,6 +47,7 @@ pub enum SqliteEventStoreError {
     TaskFailed(String),
 }
 
+/// Errors from checkpoint store operations on a [`SqliteEventStore`].
 #[derive(Debug, Error)]
 pub enum SqliteCheckpointError {
     #[error("database operation failed: {0}")]
@@ -47,6 +64,7 @@ pub enum SqliteCheckpointError {
     TaskFailed(String),
 }
 
+/// Errors from projector coordination (advisory locking) on a [`SqliteEventStore`].
 #[derive(Debug, Error)]
 pub enum SqliteCoordinationError {
     #[error(
@@ -216,6 +234,13 @@ fn try_acquire_lock(
 // SqliteEventStore
 // ---------------------------------------------------------------------------
 
+/// SQLite-backed event store implementing EventCore's storage traits.
+///
+/// Supports single-file or in-memory persistence. Construct via
+/// [`SqliteEventStore::from_connection`] with a `rusqlite::Connection`; for an
+/// in-memory store, open the connection with `":memory:"` (useful in tests).
+///
+/// All SQLite operations are executed via `spawn_blocking` for async compatibility.
 pub struct SqliteEventStore {
     conn: Arc<Mutex<rusqlite::Connection>>,
     locks: Arc<std::sync::RwLock<HashSet<String>>>,

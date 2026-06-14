@@ -1,3 +1,38 @@
+//! Procedural macros for the EventCore event sourcing library.
+//!
+//! This crate provides the `#[derive(Command)]` macro, which generates a
+//! `CommandStreams` trait implementation for a command struct. The generated
+//! implementation's `stream_declarations()` method returns every `StreamId`
+//! field annotated with `#[stream]`, declaring the event streams that the
+//! command reads and writes within a single atomic consistency boundary.
+//!
+//! # Usage
+//!
+//! Annotate a command struct with `#[derive(Command)]` and mark each
+//! `StreamId` field that participates in the consistency boundary with
+//! `#[stream]`:
+//!
+//! ```rust,ignore
+//! use eventcore::StreamId;
+//!
+//! #[derive(Command)]
+//! pub struct TransferFunds {
+//!     #[stream]
+//!     pub source_account: StreamId,
+//!     #[stream]
+//!     pub destination_account: StreamId,
+//!     pub amount: u64,
+//! }
+//! ```
+//!
+//! # Requirements
+//!
+//! - The derive target must be a struct with named fields (tuple structs are not
+//!   supported).
+//! - At least one field must carry the `#[stream]` attribute.
+//! - Every `#[stream]`-annotated field must have type `StreamId` (or
+//!   `eventcore::StreamId`).
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -6,8 +41,15 @@ use syn::{
     punctuated::Punctuated,
 };
 
-/// Macro entry point that generates `CommandStreams` implementations for
-/// structs whose `StreamId` fields are annotated with `#[stream]`.
+/// Entry point for `#[derive(Command)]`.
+///
+/// Generates a `CommandStreams` implementation for the annotated struct. Every
+/// `StreamId` field marked with `#[stream]` is
+/// included in the generated `stream_declarations()` return value, establishing
+/// the command's atomic consistency boundary.
+///
+/// See the [crate-level documentation](self) for requirements and a usage
+/// example.
 #[proc_macro_derive(Command, attributes(stream))]
 pub fn command(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

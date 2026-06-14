@@ -108,13 +108,13 @@
 //!
 //! Most applications never read events by hand — [`execute`] does it for you.
 //! When you do need a stream's raw history (for tooling or a projection),
-//! [`EventStore::read_stream`](eventcore_types::EventStore::read_stream)
+//! [`EventStore::read_stream`]
 //! returns a lazy [`EventStream`], an async `Stream` of events. To materialize
 //! the whole history into a `Vec`, pass it to the [`collect_events`] helper.
 //!
 //! ## Backends
 //!
-//! EventCore ships several [`EventStore`](eventcore_types::EventStore)
+//! EventCore ships several [`EventStore`]
 //! implementations behind feature flags:
 //!
 //! - `eventcore-memory` — zero-dependency in-memory store for tests and
@@ -510,7 +510,7 @@ pub(crate) fn compute_retry_delay_ms(
 /// command execution workflow: loading state from multiple streams, validating
 /// business rules, and atomically committing resulting events.
 ///
-/// Internally, this function drives an [`ExecutePipeline`] state machine that
+/// Internally, this function drives an `ExecutePipeline` state machine that
 /// yields effects (read stream, append events, sleep). This function is the
 /// thin shell loop that dispatches those effects to the `EventStore` trait.
 ///

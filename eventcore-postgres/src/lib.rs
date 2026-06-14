@@ -1,3 +1,25 @@
+//! PostgreSQL event store backend for EventCore.
+//!
+//! This crate provides a production-grade [`PostgresEventStore`] backed by PostgreSQL,
+//! with ACID transactions, advisory locks, and connection pooling via `sqlx`.
+//!
+//! Event immutability is enforced by PostgreSQL triggers. Stream pattern matching
+//! follows the conventions described in ADR-0047.
+//!
+//! `PostgresEventStore` implements [`EventStore`], [`EventReader`], [`CheckpointStore`],
+//! and [`ProjectorCoordinator`] from `eventcore-types`.
+//!
+//! # Getting Started
+//!
+//! ```no_run
+//! use eventcore_postgres::PostgresEventStore;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let store = PostgresEventStore::new("postgres://user:pass@localhost/mydb").await?;
+//! # Ok(())
+//! # }
+//! ```
+
 use std::time::Duration;
 
 use eventcore_types::{
@@ -15,6 +37,7 @@ use thiserror::Error;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
+/// Errors that can occur when creating a [`PostgresEventStore`].
 #[derive(Debug, Error)]
 pub enum PostgresEventStoreError {
     #[error("failed to create postgres connection pool")]
@@ -68,6 +91,13 @@ impl Default for PostgresConfig {
     }
 }
 
+/// PostgreSQL-backed event store implementing EventCore's storage traits.
+///
+/// Provides atomic multi-stream event writes with optimistic concurrency control,
+/// advisory locks for projector coordination, and connection pooling.
+///
+/// Use [`PostgresEventStore::new`] (or [`PostgresEventStore::with_config`]) with a
+/// PostgreSQL connection URL to create an instance.
 #[derive(Debug, Clone)]
 pub struct PostgresEventStore {
     pool: Pool<Postgres>,
