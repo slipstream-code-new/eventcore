@@ -15,12 +15,12 @@
 //!
 //! ## Module map
 //!
-//! - [`error`] — the crate's error types
-//! - [`config`] — store configuration and the on-disk directory layout
-//! - [`format`] — the immutable JSONL transaction-file format (ADR-0038)
-//! - [`index`] — the in-memory read model and linearization engine (ADR-0039)
-//! - [`merge`] — fork detection and reconciliation types (ADR-0041/0042)
-//! - [`coordination`] — locking, checkpoints, and projector coordination
+//! - `error` — the crate's error types
+//! - `config` — store configuration and the on-disk directory layout
+//! - `format` — the immutable JSONL transaction-file format (ADR-0038)
+//! - `index` — the in-memory read model and linearization engine (ADR-0039)
+//! - `merge` — fork detection and reconciliation types (ADR-0041/0042)
+//! - `coordination` — locking, checkpoints, and projector coordination
 //!   (ADR-0040)
 //!
 //! See ADRs 0038–0046 and the `fs-merge-mode` blueprint for the full design.

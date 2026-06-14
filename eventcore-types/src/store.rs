@@ -240,7 +240,7 @@ pub trait EventStore {
 /// - Non-empty (trimmed strings with at least 1 character)
 /// - Within reasonable length (max 255 characters)
 /// - Sanitized (leading/trailing whitespace removed)
-/// - Free of glob metacharacters (*, ?, [, ]) per ADR-017
+/// - Free of glob metacharacters (`*`, `?`, `[`, `]`) per ADR-017
 ///
 #[nutype(
     sanitize(trim),
@@ -274,7 +274,7 @@ pub struct StreamId(String);
 /// - Sanitized (leading/trailing whitespace removed)
 ///
 /// Note: StreamPrefix performs literal prefix matching only. Per ADR-017 it
-/// rejects glob metacharacters (*, ?, [, ]) at construction so that literal
+/// rejects glob metacharacters (`*`, `?`, `[`, `]`) at construction so that literal
 /// prefixes can never be confused with glob patterns. Glob pattern matching is
 /// provided by the dedicated [`StreamPattern`] type (ADR-0047).
 #[nutype(
