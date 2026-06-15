@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-memory-v1.0.0...eventcore-memory-v2.0.0) - 2026-06-15
+
+### Documentation
+
+- align all documentation with the 1.0 API ([#424](https://git.johnwilger.com/Slipstream/eventcore/pulls/424))
+
 ## [1.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-memory-v0.9.0...eventcore-memory-v1.0.0) - 2026-06-13
 
 ### Features
