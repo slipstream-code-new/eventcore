@@ -16,13 +16,14 @@ use eventcore_types::{
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_testing::deterministic::DeterministicConflictStore;
 /// use eventcore_memory::InMemoryEventStore;
 ///
 /// // Create a store that will fail with VersionConflict twice before succeeding
 /// let inner = InMemoryEventStore::new();
 /// let store = DeterministicConflictStore::new(inner, 2);
+/// # let _ = store;
 ///
 /// // First two append_events calls will return VersionConflict
 /// // Third call will delegate to inner store

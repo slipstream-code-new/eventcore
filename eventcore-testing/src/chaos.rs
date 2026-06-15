@@ -7,7 +7,7 @@
 //! The canonical entry point is the [`ChaosEventStoreExt::with_chaos`] extension
 //! method, which is implemented for every `EventStore`:
 //!
-//! ```ignore
+//! ```no_run
 //! use eventcore_memory::InMemoryEventStore;
 //! use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
 //!
@@ -18,6 +18,7 @@
 //!
 //! // `chaos_store` is itself an `EventStore`, so it can be passed to
 //! // `eventcore::execute()` like any other backend.
+//! # let _ = chaos_store;
 //! ```
 
 use std::{future::Future, sync::Mutex};
@@ -36,12 +37,13 @@ use rand::{RngExt, SeedableRng, random, rngs::StdRng};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_testing::chaos::FailureProbability;
 ///
 /// let never = FailureProbability::try_new(0.0).expect("0.0 is valid");
 /// let sometimes = FailureProbability::try_new(0.5).expect("0.5 is valid");
 /// let always = FailureProbability::try_new(1.0).expect("1.0 is valid");
+/// # let _ = (never, sometimes, always);
 ///
 /// // Values outside [0.0, 1.0] are rejected
 /// assert!(FailureProbability::try_new(1.5).is_err());
@@ -60,12 +62,13 @@ pub struct FailureProbability(f32);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_testing::chaos::VersionConflictProbability;
 ///
 /// let never = VersionConflictProbability::try_new(0.0).expect("0.0 is valid");
 /// let sometimes = VersionConflictProbability::try_new(0.5).expect("0.5 is valid");
 /// let always = VersionConflictProbability::try_new(1.0).expect("1.0 is valid");
+/// # let _ = (never, sometimes, always);
 ///
 /// // Values outside [0.0, 1.0] are rejected
 /// assert!(VersionConflictProbability::try_new(1.5).is_err());
@@ -88,12 +91,13 @@ pub struct VersionConflictProbability(f32);
 /// [`with_failure_probability`](ChaosConfig::with_failure_probability) and
 /// [`with_version_conflict_probability`](ChaosConfig::with_version_conflict_probability).
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_testing::chaos::ChaosConfig;
 ///
 /// let config = ChaosConfig::deterministic()
 ///     .with_failure_probability(0.25)
 ///     .with_version_conflict_probability(0.1);
+/// # let _ = config;
 /// ```
 #[derive(Debug, Clone)]
 pub struct ChaosConfig {
@@ -156,12 +160,13 @@ impl Default for ChaosConfig {
 /// This is the canonical entry point for chaos testing. It is implemented for
 /// every `EventStore`, so call `with_chaos` directly on a base store:
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_memory::InMemoryEventStore;
 /// use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
 ///
 /// let chaos_store =
 ///     InMemoryEventStore::new().with_chaos(ChaosConfig::deterministic().with_failure_probability(0.5));
+/// # let _ = chaos_store;
 /// ```
 pub trait ChaosEventStoreExt: Sized {
     /// Wraps `self` in a [`ChaosEventStore`] configured by `config`.

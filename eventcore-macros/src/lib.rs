@@ -12,7 +12,7 @@
 //! `StreamId` field that participates in the consistency boundary with
 //! `#[stream]`:
 //!
-//! ```rust,ignore
+//! ```no_run
 //! use eventcore::{Command, StreamId};
 //!
 //! #[derive(Command)]

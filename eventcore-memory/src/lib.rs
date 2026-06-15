@@ -55,7 +55,7 @@ struct StoreData {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_memory::InMemoryEventStore;
 ///
 /// let store = InMemoryEventStore::new();
@@ -321,7 +321,7 @@ impl ProjectorCoordinator for InMemoryEventStore {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_memory::InMemoryCheckpointStore;
 ///
 /// let checkpoint_store = InMemoryCheckpointStore::new();

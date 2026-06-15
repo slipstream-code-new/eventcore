@@ -319,7 +319,7 @@ pub struct StreamPrefix(String);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::StreamPattern;
 ///
 /// let pattern = StreamPattern::try_new("account-*").unwrap();
@@ -378,7 +378,8 @@ impl StreamVersion {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use eventcore_types::StreamVersion;
     /// let v0 = StreamVersion::new(0);
     /// let v1 = v0.increment();
     /// assert_eq!(v1, StreamVersion::new(1));

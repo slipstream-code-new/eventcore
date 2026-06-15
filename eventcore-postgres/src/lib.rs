@@ -52,7 +52,7 @@ pub enum PostgresEventStoreError {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_postgres::MaxConnections;
 /// use std::num::NonZeroU32;
 ///
