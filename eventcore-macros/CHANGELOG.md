@@ -3,21 +3,32 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1.html).
 
 ## [Unreleased]
+
+## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-macros-v1.0.0...eventcore-macros-v1.0.1) - 2026-06-15
+
+### Documentation
+
+- overhaul API documentation across all crates ([#420](https://git.johnwilger.com/Slipstream/eventcore/pulls/420))
+- align all documentation with the 1.0 API ([#424](https://git.johnwilger.com/Slipstream/eventcore/pulls/424))
+
+### Testing
+
+- harden doctests and guard docs against fabricated APIs ([#426](https://git.johnwilger.com/Slipstream/eventcore/pulls/426))
 
 ## [1.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-macros-v0.9.0...eventcore-macros-v1.0.0) - 2026-06-13
 
 ### Features
 
-- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+- _(eventcore)_ [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
 
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-macros-v0.8.0...eventcore-macros-v0.8.1) - 2026-06-13
 
 ### Deps
 
-- *(deps)* bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
+- _(deps)_ bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
 
 ## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-macros-v0.6.0...eventcore-macros-v0.7.0) - 2026-04-13
 
@@ -43,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Refactoring
 
-- *(release)* switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
+- _(release)_ switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
 
 ## [0.2.1](https://github.com/jwilger/eventcore/compare/v0.2.0...v0.2.1) - 2025-12-26
 
@@ -56,9 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Features
 
 - Implement command definition macros (Phase 13.1)
-- *(eventcore-006)* deliver derive macro and acceptance evidence ([#158](https://github.com/jwilger/eventcore/pull/158))
-- *(macros)* add require! guard macro ([#163](https://github.com/jwilger/eventcore/pull/163))
-- *(postgres)* add PostgreSQL event store implementation ([#169](https://github.com/jwilger/eventcore/pull/169))
+- _(eventcore-006)_ deliver derive macro and acceptance evidence ([#158](https://github.com/jwilger/eventcore/pull/158))
+- _(macros)_ add require! guard macro ([#163](https://github.com/jwilger/eventcore/pull/163))
+- _(postgres)_ add PostgreSQL event store implementation ([#169](https://github.com/jwilger/eventcore/pull/169))
 - re-export Command macro via feature flag ([#178](https://github.com/jwilger/eventcore/pull/178))
 
 ### Miscellaneous Tasks
@@ -71,4 +82,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - reorganize workspace per ADR-022 for feature flag re-exports ([#188](https://github.com/jwilger/eventcore/pull/188))
 - extract InMemoryEventStore into separate eventcore-memory crate ([#196](https://github.com/jwilger/eventcore/pull/196))
-- *(types)* use UUID7 event IDs as global positions ([#197](https://github.com/jwilger/eventcore/pull/197))
+- _(types)_ use UUID7 event IDs as global positions ([#197](https://github.com/jwilger/eventcore/pull/197))

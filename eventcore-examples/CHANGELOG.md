@@ -3,22 +3,28 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1.html).
 
 ## [Unreleased]
+
+## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-examples-v1.0.0...eventcore-examples-v1.0.1) - 2026-06-15
+
+### Testing
+
+- harden doctests and guard docs against fabricated APIs ([#426](https://git.johnwilger.com/Slipstream/eventcore/pulls/426))
 
 ## [1.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-examples-v0.9.0...eventcore-examples-v1.0.0) - 2026-06-13
 
 ### Features
 
-- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+- _(eventcore)_ [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
 
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-examples-v0.8.0...eventcore-examples-v0.8.1) - 2026-06-13
 
 ### Deps
 
-- *(deps)* bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
-- *(deps)* bump nutype from 0.6.2 to 0.7.0 ([#381](https://git.johnwilger.com/Slipstream/eventcore/pulls/381))
+- _(deps)_ bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
+- _(deps)_ bump nutype from 0.6.2 to 0.7.0 ([#381](https://git.johnwilger.com/Slipstream/eventcore/pulls/381))
 
 ## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-examples-v0.6.0...eventcore-examples-v0.7.0) - 2026-04-13
 
@@ -53,4 +59,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deps
 
-- *(deps)* bump the minor-and-patch group with 14 updates
+- _(deps)_ bump the minor-and-patch group with 14 updates

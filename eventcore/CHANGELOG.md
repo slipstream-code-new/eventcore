@@ -3,9 +3,21 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1.html).
 
 ## [Unreleased]
+
+## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-v1.0.0...eventcore-v1.0.1) - 2026-06-15
+
+### Documentation
+
+- overhaul API documentation across all crates ([#420](https://git.johnwilger.com/Slipstream/eventcore/pulls/420))
+- fix stale and incomplete API doc comments ([#422](https://git.johnwilger.com/Slipstream/eventcore/pulls/422))
+- align all documentation with the 1.0 API ([#424](https://git.johnwilger.com/Slipstream/eventcore/pulls/424))
+
+### Testing
+
+- harden doctests and guard docs against fabricated APIs ([#426](https://git.johnwilger.com/Slipstream/eventcore/pulls/426))
 
 ## [1.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-v0.9.0...eventcore-v1.0.0) - 2026-06-13
 
@@ -15,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+- _(eventcore)_ [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
 
 ### Miscellaneous Tasks
 
@@ -25,8 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deps
 
-- *(deps)* bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
-- *(deps)* bump nutype from 0.6.2 to 0.7.0 ([#381](https://git.johnwilger.com/Slipstream/eventcore/pulls/381))
+- _(deps)_ bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
+- _(deps)_ bump nutype from 0.6.2 to 0.7.0 ([#381](https://git.johnwilger.com/Slipstream/eventcore/pulls/381))
 
 ## [0.7.1](https://github.com/jwilger/eventcore/compare/eventcore-v0.7.0...eventcore-v0.7.1) - 2026-04-15
 
@@ -91,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-- *(testing)* contract-first CheckpointStore with unified backend verification ([#234](https://github.com/jwilger/eventcore/pull/234))
+- _(testing)_ contract-first CheckpointStore with unified backend verification ([#234](https://github.com/jwilger/eventcore/pull/234))
 
 ### Refactoring
 
@@ -102,31 +114,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Features
 
 - add configurable poll behavior for projections ([#213](https://github.com/jwilger/eventcore/pull/213))
-- *(eventcore)* implement EventRetryConfig for event processing failures ([#215](https://github.com/jwilger/eventcore/pull/215))
+- _(eventcore)_ implement EventRetryConfig for event processing failures ([#215](https://github.com/jwilger/eventcore/pull/215))
 
 ### Refactoring
 
 - eliminate primitive obsession across configuration structs ([#216](https://github.com/jwilger/eventcore/pull/216))
-- *(release)* switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
+- _(release)_ switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
 
 ## [0.2.0](https://github.com/jwilger/eventcore/releases/tag/v0.2.0) - 2025-12-26
 
 ### Bug Fixes
 
 - add clippy allow attribute to emit! macro to suppress vec_init_then_push warning ([#106](https://github.com/jwilger/eventcore/pull/106))
-- *(projection)* add retry with exponential backoff for database poll errors ([#191](https://github.com/jwilger/eventcore/pull/191))
+- _(projection)_ add retry with exponential backoff for database poll errors ([#191](https://github.com/jwilger/eventcore/pull/191))
 
 ### Features
 
-- *(eventcore)* implement subscription system with position tracking
+- _(eventcore)_ implement subscription system with position tracking
 - Implement command definition macros (Phase 13.1)
 - Implement fluent CommandExecutorBuilder API
 - Implement enhanced error diagnostics with miette
 - Add comprehensive interactive documentation tutorials (Phase 13.4)
 - Add comprehensive final testing suite (Phase 14.2)
-- *(projection)* implement poll-based projection runner with error handling ([#190](https://github.com/jwilger/eventcore/pull/190))
-- *(projection)* implement EventReader contract tests ([#193](https://github.com/jwilger/eventcore/pull/193))
-- *(testing)* create unified event_store_suite! macro ([#194](https://github.com/jwilger/eventcore/pull/194))
+- _(projection)_ implement poll-based projection runner with error handling ([#190](https://github.com/jwilger/eventcore/pull/190))
+- _(projection)_ implement EventReader contract tests ([#193](https://github.com/jwilger/eventcore/pull/193))
+- _(testing)_ create unified event_store_suite! macro ([#194](https://github.com/jwilger/eventcore/pull/194))
 
 ### Miscellaneous Tasks
 
@@ -137,13 +149,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Refactoring
 
-- *(executor)* extract execute_type_safe and remove dead code ([#92](https://github.com/jwilger/eventcore/pull/92))
+- _(executor)_ extract execute_type_safe and remove dead code ([#92](https://github.com/jwilger/eventcore/pull/92))
 - reorganize workspace per ADR-022 for feature flag re-exports ([#188](https://github.com/jwilger/eventcore/pull/188))
 - extract InMemoryEventStore into separate eventcore-memory crate ([#196](https://github.com/jwilger/eventcore/pull/196))
-- *(types)* use UUID7 event IDs as global positions ([#197](https://github.com/jwilger/eventcore/pull/197))
+- _(types)_ use UUID7 event IDs as global positions ([#197](https://github.com/jwilger/eventcore/pull/197))
 
 ### Deps
 
-- *(deps)* bump the minor-and-patch group with 14 updates
-- *(deps)* bump bincode from 1.3.3 to 2.0.1 ([#6](https://github.com/jwilger/eventcore/pull/6))
-- *(deps)* bump the minor-and-patch group with 17 updates ([#192](https://github.com/jwilger/eventcore/pull/192))
+- _(deps)_ bump the minor-and-patch group with 14 updates
+- _(deps)_ bump bincode from 1.3.3 to 2.0.1 ([#6](https://github.com/jwilger/eventcore/pull/6))
+- _(deps)_ bump the minor-and-patch group with 17 updates ([#192](https://github.com/jwilger/eventcore/pull/192))
