@@ -1,4 +1,4 @@
-# Chapter 8.3: Error Reference
+# Chapter 7.3: Error Reference
 
 This chapter is a comprehensive reference for the error types EventCore
 actually returns. The two error types a downstream consumer encounters are
@@ -121,7 +121,7 @@ Returned by `EventStore::read_stream`, `EventStore::append_events`, and the
 `StreamWrites` builder. It is also wrapped by `CommandError::EventStoreError`.
 
 ```rust
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(thiserror::Error, Debug, PartialEq)]
 pub enum EventStoreError {
     /// The same stream was registered twice with different expected versions
     /// when building a `StreamWrites` value.

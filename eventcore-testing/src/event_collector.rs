@@ -8,13 +8,16 @@
 //! # Example
 //!
 //! ```ignore
+//! use eventcore::{execute, run_projection, ProjectionConfig, RetryPolicy};
 //! use std::sync::{Arc, Mutex};
 //!
-//! execute(&mut store, &command).await?;
+//! // `store` and `backend` are your `EventStore` (e.g. `InMemoryEventStore`);
+//! // `command` implements `CommandLogic`; `MyEvent` is the event type.
+//! execute(&store, command, RetryPolicy::new()).await?;
 //!
 //! let storage = Arc::new(Mutex::new(Vec::new()));
 //! let collector = EventCollector::<MyEvent>::new(storage.clone());
-//! run_projection(collector, &backend).await?;
+//! run_projection(collector, &backend, ProjectionConfig::default()).await?;
 //!
 //! // Events accessible through the original storage handle
 //! assert_eq!(storage.lock().unwrap().len(), expected_count);

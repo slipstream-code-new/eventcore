@@ -114,13 +114,14 @@
 //!
 //! ## Backends
 //!
-//! EventCore ships several [`EventStore`]
-//! implementations behind feature flags:
+//! EventCore works with several [`EventStore`] implementations:
 //!
-//! - `eventcore-memory` — zero-dependency in-memory store for tests and
-//!   examples (used in the quick start above).
-//! - `postgres` feature — PostgreSQL backend with ACID transactions.
-//! - `sqlite` feature — SQLite backend with optional SQLCipher encryption.
+//! - `eventcore-memory` — a separate zero-dependency crate added directly to
+//!   your `Cargo.toml` (used in the quick start above) for tests and examples.
+//! - `postgres` feature — PostgreSQL backend with ACID transactions,
+//!   re-exported as `eventcore::postgres`.
+//! - `sqlite` feature — SQLite backend with optional SQLCipher encryption,
+//!   re-exported as `eventcore::sqlite`.
 //!
 //! ## Error handling
 //!
@@ -233,12 +234,10 @@ macro_rules! require {
     };
 }
 
-/// Represents the successful outcome of command execution.
-///
-/// This type is returned when a command completes successfully, including
-/// state reconstruction, business rule validation, and atomic event persistence.
 /// The result of a successful [`execute`] call.
 ///
+/// Returned when a command completes successfully, including state
+/// reconstruction, business rule validation, and atomic event persistence.
 /// Contains metadata about the execution, most notably how many attempts
 /// were needed before the command was committed (1 on first success,
 /// higher if optimistic-concurrency retries occurred).
@@ -248,7 +247,7 @@ pub struct ExecutionResponse {
 }
 
 impl ExecutionResponse {
-    pub fn new(attempts: NonZeroU32) -> Self {
+    pub(crate) fn new(attempts: NonZeroU32) -> Self {
         Self { attempts }
     }
 
@@ -411,11 +410,11 @@ impl RetryPolicy {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
-    /// # use eventcore::{RetryPolicy, MetricsHook};
+    /// ```rust
+    /// # use eventcore::{RetryPolicy, MetricsHook, RetryContext};
     /// struct MyMetricsHook;
     /// impl MetricsHook for MyMetricsHook {
-    ///     fn on_retry_attempt(&self, ctx: &RetryContext) {
+    ///     fn on_retry_attempt(&self, _ctx: &RetryContext) {
     ///         // Record metrics
     ///     }
     /// }

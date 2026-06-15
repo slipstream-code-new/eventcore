@@ -115,7 +115,7 @@ EventCore tracks stream versions to detect conflicts:
    - Self-documenting code
 
 4. **Performance**
-   - ~100 operations/second with PostgreSQL
+   - ~83 operations/second with PostgreSQL
    - Optimized for correctness over raw throughput
    - Batched operations for better performance
 
@@ -161,10 +161,11 @@ impl CommandLogic for TransferMoney {
         // Check balance
         let from_balance = state.balance(&self.from_account);
         if from_balance < self.amount.value() {
-            return Err(CommandError::business_rule_violated(format!(
+            return Err(format!(
                 "Insufficient funds: balance={}, requested={}",
                 from_balance, self.amount
-            )));
+            )
+            .into());
         }
 
         // Create atomic events for both accounts (domain events)

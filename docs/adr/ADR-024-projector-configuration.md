@@ -6,7 +6,7 @@ superseded
 
 **Superseded by:** ADR-027 (Projector Poll and Retry Configuration) and ADR-026 (Subscription Table + Advisory Lock Coordination)
 
-> **Note:** This ADR is retained for historical context. ADR-027 captures the still-valid poll and event retry configuration. ADR-026 eliminated heartbeat configuration entirely by adopting session-scoped advisory locks on dedicated connections. See ARCHITECTURE.md for current authoritative guidance.
+> **Note:** This ADR is retained for historical context. ADR-027 captures the still-valid poll and event retry configuration. ADR-026 eliminated heartbeat configuration entirely by adopting session-scoped advisory locks on dedicated connections. See `docs/manual/01-introduction/04-architecture.md` for current authoritative guidance.
 
 ## Context
 
@@ -17,6 +17,7 @@ Production projector deployments face three distinct categories of failure that 
 **1. Poll Infrastructure Failures**
 
 When the projector polls for events, the underlying infrastructure can fail:
+
 - Database connection errors during `read_events_after()`
 - Network timeouts reaching the event store
 - Transient unavailability during database failover
@@ -26,6 +27,7 @@ These failures are about the polling mechanism itself, not about processing any 
 **2. Event Processing Failures**
 
 When `apply()` fails for a specific event:
+
 - Read model database constraint violation
 - Business logic error in projection
 - External service unavailable during side effect
@@ -35,6 +37,7 @@ ADR-021 already addresses this: `on_error()` returns `FailureStrategy::Retry`, `
 **3. Leadership Liveness Failures**
 
 ADR-023's crash safety relies on "guard released on disconnect" - if the leader process terminates, the database connection closes, and advisory locks are released. But what about:
+
 - Infinite loops in projection code
 - Deadlocks waiting for resources
 - Network partitions where the connection remains open but the process is unreachable
@@ -135,11 +138,11 @@ These parameters are on ProjectorCoordinator, not Projector, because liveness is
 
 Each concern has different units, different defaults, and different operational meaning:
 
-| Concern | Unit | Typical Range | Changed When |
-|---------|------|---------------|--------------|
-| Poll interval | Duration | 50ms - 60s | Latency requirements change |
-| Event retry delay | Duration | 100ms - 30s | Transient failure patterns change |
-| Heartbeat interval | Duration | 1s - 30s | Infrastructure SLAs change |
+| Concern            | Unit     | Typical Range | Changed When                      |
+| ------------------ | -------- | ------------- | --------------------------------- |
+| Poll interval      | Duration | 50ms - 60s    | Latency requirements change       |
+| Event retry delay  | Duration | 100ms - 30s   | Transient failure patterns change |
+| Heartbeat interval | Duration | 1s - 30s      | Infrastructure SLAs change        |
 
 Combining them into one struct suggests they're related when they're not. A change to poll interval should not require reviewing heartbeat settings.
 

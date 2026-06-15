@@ -54,7 +54,7 @@ pub struct FailureContext<'a, E> {
 ///     ctx: FailureContext<Self::Error>,
 /// ) -> FailureStrategy {
 ///     match ctx.error {
-///         MyError::Transient(_) if ctx.retry_count < 3 => FailureStrategy::Retry,
+///         MyError::Transient(_) if ctx.retry_count < RetryCount::new(3) => FailureStrategy::Retry,
 ///         MyError::PoisonEvent(_) => FailureStrategy::Skip,
 ///         _ => FailureStrategy::Fatal,
 ///     }
@@ -222,7 +222,7 @@ pub trait Projector: Send + 'static {
     ///     ctx: FailureContext<Self::Error>,
     /// ) -> FailureStrategy {
     ///     match ctx.error {
-    ///         MyError::Transient(_) if ctx.retry_count < 3 => FailureStrategy::Retry,
+    ///         MyError::Transient(_) if ctx.retry_count < RetryCount::new(3) => FailureStrategy::Retry,
     ///         MyError::PoisonEvent(_) => FailureStrategy::Skip,
     ///         _ => FailureStrategy::Fatal,
     ///     }
@@ -244,7 +244,7 @@ pub trait Projector: Send + 'static {
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::BatchSize;
+/// use eventcore_types::BatchSize;
 ///
 /// let small = BatchSize::new(100);
 /// let large = BatchSize::new(1_000_000);
@@ -262,7 +262,7 @@ pub struct BatchSize(usize);
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::MaxRetryAttempts;
+/// use eventcore_types::MaxRetryAttempts;
 ///
 /// let no_retries = MaxRetryAttempts::new(0);
 /// let standard = MaxRetryAttempts::new(3);
@@ -285,7 +285,7 @@ pub struct MaxRetryAttempts(u32);
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::BackoffMultiplier;
+/// use eventcore_types::BackoffMultiplier;
 ///
 /// let constant = BackoffMultiplier::try_new(1.0).expect("1.0 is valid");  // No backoff
 /// let standard = BackoffMultiplier::try_new(2.0).expect("2.0 is valid");  // Double each time
@@ -309,7 +309,7 @@ pub struct BackoffMultiplier(f64);
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::MaxConsecutiveFailures;
+/// use eventcore_types::MaxConsecutiveFailures;
 /// use std::num::NonZeroU32;
 ///
 /// let lenient = MaxConsecutiveFailures::new(NonZeroU32::new(10).expect("10 is non-zero"));
@@ -331,7 +331,7 @@ pub struct MaxConsecutiveFailures(std::num::NonZeroU32);
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::MaxRetries;
+/// use eventcore_types::MaxRetries;
 ///
 /// let no_retry = MaxRetries::new(0);
 /// let standard = MaxRetries::new(3);
@@ -349,7 +349,7 @@ pub struct MaxRetries(u32);
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::DelayMilliseconds;
+/// use eventcore_types::DelayMilliseconds;
 ///
 /// let short = DelayMilliseconds::new(100);
 /// let medium = DelayMilliseconds::new(1000);
@@ -367,7 +367,7 @@ pub struct DelayMilliseconds(u64);
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::AttemptNumber;
+/// use eventcore_types::AttemptNumber;
 /// use std::num::NonZeroU32;
 ///
 /// let first_attempt = AttemptNumber::new(NonZeroU32::new(1).expect("1 is non-zero"));
@@ -389,7 +389,7 @@ pub struct AttemptNumber(std::num::NonZeroU32);
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::RetryCount;
+/// use eventcore_types::RetryCount;
 ///
 /// let initial_failure = RetryCount::new(0);
 /// let after_first_retry = RetryCount::new(1);
@@ -406,7 +406,7 @@ pub struct RetryCount(u32);
 /// # Examples
 ///
 /// ```ignore
-/// use eventcore_types::projection::{EventPage, BatchSize};
+/// use eventcore_types::{EventPage, BatchSize};
 ///
 /// // First page
 /// let page = EventPage::first(BatchSize::new(100));

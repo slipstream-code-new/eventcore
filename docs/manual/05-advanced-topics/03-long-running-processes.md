@@ -25,6 +25,8 @@ EventCore implements the process manager pattern:
 
 ```rust
 use eventcore::{Command, CommandLogic, CommandError, NewEvents, execute, RetryPolicy};
+// EventStore lives in eventcore-types and is not re-exported by the eventcore facade.
+use eventcore_types::EventStore;
 
 #[derive(Command, Clone)]
 struct OrderFulfillmentProcess {
@@ -232,7 +234,7 @@ For distributed transactions, implement the saga pattern:
 
 ```rust
 #[derive(Command, Clone)]
-struct Bookingsaga {
+struct BookingSaga {
     #[stream]
     saga_id: StreamId,
 
@@ -263,6 +265,13 @@ enum StepStatus {
 impl CommandLogic for BookingSaga {
     type State = SagaState;
     type Event = SagaEvent;
+
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        // Fold saga events into SagaState (omitted for brevity).
+        // CommandLogic::apply is required and has no default body.
+        let _ = event;
+        state
+    }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if state.compensation_mode {
@@ -343,8 +352,10 @@ fn create_travel_booking_saga(
     ];
 
     BookingSaga {
-        saga_id: StreamId::from(format!("booking-saga-{}", SagaId::new())),
-        reservation_id: StreamId::from(format!("reservation-{}", ReservationId::new())),
+        saga_id: StreamId::try_new(format!("booking-saga-{}", SagaId::new()))
+            .expect("valid stream id"),
+        reservation_id: StreamId::try_new(format!("reservation-{}", ReservationId::new()))
+            .expect("valid stream id"),
         steps,
         current_step: 0,
         compensation_mode: false,
@@ -356,7 +367,7 @@ fn create_travel_booking_saga(
 
 Long-running processes need robust timeout and retry logic:
 
-````rust
+```rust
 #[derive(Debug, Clone)]
 struct ProcessTimeout {
     timeout_at: DateTime<Utc>,
@@ -460,6 +471,13 @@ impl CommandLogic for ProcessTimeoutCommand {
     type State = ProcessState;
     type Event = ProcessEvent;
 
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        // Fold process events into ProcessState (omitted for brevity).
+        // CommandLogic::apply is required and has no default body.
+        let _ = event;
+        state
+    }
+
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Check if process should retry or fail
         let should_retry = state.timeout.as_ref().map(|t| t.should_retry()).unwrap_or(false);
@@ -473,6 +491,7 @@ impl CommandLogic for ProcessTimeoutCommand {
         }
     }
 }
+```
 
 ## Process Monitoring and Observability
 
@@ -507,6 +526,28 @@ lazy_static! {
         "Number of currently active processes"
     ).unwrap();
 }
-````
+```
 
-... (rest unchanged)
+Increment and observe these metrics from the projection or listener that
+drives your processes — when a process starts, completes, fails, or times
+out — so you can track throughput, success rate, and duration in production.
+
+## Summary
+
+Long-running processes in EventCore:
+
+- ✅ **Process managers** - Coordinate multi-step workflows as commands
+- ✅ **Event-driven coordination** - Advance processes by executing commands
+- ✅ **Saga pattern** - Compensate completed steps when a step fails
+- ✅ **Timeout and retry** - Schedule timeouts and retry with backoff
+- ✅ **Observable** - Monitor process health with metrics
+
+Key patterns:
+
+1. Model each process as a command with pure `apply` and `handle`
+2. React to system events and advance the process via `execute()`
+3. Compensate in reverse order when a saga step fails
+4. Schedule timeouts and apply a retry policy with backoff
+5. Emit metrics so processes are observable in production
+
+Next, let's explore [Distributed Systems](./04-distributed-systems.md) →

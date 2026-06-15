@@ -21,10 +21,10 @@ edition = "2024"
 
 [dependencies]
 # EventCore core functionality
-eventcore = "0.1"
+eventcore = "1.0"
 
 # For development/testing - switch to eventcore-postgres for production
-eventcore-memory = "0.1"
+eventcore-memory = "1.0"
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -34,7 +34,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Type validation
-nutype = { version = "0.6", features = ["serde"] }
+nutype = { version = "0.7", features = ["serde"] }
 
 # Utilities
 uuid = { version = "1.11", features = ["v7", "serde"] }
@@ -46,7 +46,7 @@ clap = { version = "4.5", features = ["derive"] }
 
 [dev-dependencies]
 # Testing utilities
-eventcore-testing = "0.1"
+eventcore-testing = "1.0"
 proptest = "1.6"
 ```
 
@@ -268,7 +268,7 @@ impl std::fmt::Display for TaskId {
 }
 
 /// Task priority levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Priority {
     Low,
     Medium,
@@ -283,7 +283,7 @@ impl Default for Priority {
 }
 
 /// Task status - note we model this as events, not mutable state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TaskStatus {
     Open,
     InProgress,
@@ -487,14 +487,20 @@ If you want persistence without running a database server, use the SQLite adapte
 
 ```toml
 [dependencies]
-eventcore-sqlite = "0.1"
+eventcore-sqlite = "1.0"
 ```
 
 ```rust
-use eventcore_sqlite::SqliteEventStore;
+use eventcore_sqlite::{SqliteConfig, SqliteEventStore};
+use std::path::PathBuf;
 
-// File-backed store - data persists across restarts
-let store = SqliteEventStore::new("./taskmaster.db").await?;
+// File-backed store - data persists across restarts.
+// `SqliteEventStore::new` is synchronous and takes a `SqliteConfig`.
+let config = SqliteConfig {
+    path: PathBuf::from("./taskmaster.db"),
+    encryption_key: None, // Some(key) enables SQLCipher encryption
+};
+let store = SqliteEventStore::new(config)?;
 ```
 
 No external services needed - the database is embedded in your application.
@@ -518,7 +524,7 @@ docker run -d \
 
 ```toml
 [dependencies]
-eventcore-postgres = "0.1"
+eventcore-postgres = "1.0"
 ```
 
 3. Set environment variable:

@@ -1,5 +1,7 @@
 # EventCore Caching Architecture Decision
 
+> **Historical archive.** This document records a point-in-time design decision and is not maintained. Its "performance targets achieved" claims below are contradicted by the measured results in the sibling archived reports — `benchmarks/performance-report.md` (~86 ops/sec single-stream) and `BENCHMARKS.md` (~167 ops/sec, a 30–60x gap to target). The recorded figures are preserved as-is; treat them as historical and flag for human reconciliation rather than as validated current numbers.
+
 ## Context
 
 During Phase 15.6 performance optimization review, the question arose about implementing a version cache infrastructure for the PostgreSQL adapter to improve performance of stream version lookups.

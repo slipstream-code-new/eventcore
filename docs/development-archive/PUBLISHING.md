@@ -1,5 +1,7 @@
 # EventCore Publishing Strategy
 
+> **Historical (archived).** This describes a manual, hand-rolled release process that no longer reflects how EventCore is published. Superseded by ADR-025 and `docs/RELEASE_PROCESS.md`: releasing is now automated via release-plz with full lockstep versioning (all crates share an identical major, minor, and patch). Kept for historical reference only.
+
 This document outlines the comprehensive publishing strategy for the EventCore workspace, including release processes, dependency management, and crate coordination.
 
 ## Table of Contents

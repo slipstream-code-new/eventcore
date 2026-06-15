@@ -27,10 +27,11 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 | -------------------- | ------------------------------------------------------------------ |
 | `eventcore`          | Main library: `execute()`, `run_projection()`, re-exports          |
 | `eventcore-types`    | Shared vocabulary: traits (`EventStore`, `CommandLogic`) and types |
-| `eventcore-macros`   | `#[derive(Command)]`, `require!`, `emit!` macro implementations    |
+| `eventcore-macros`   | `#[derive(Command)]` macro implementation                          |
 | `eventcore-postgres` | PostgreSQL backend with ACID transactions and advisory locks       |
 | `eventcore-sqlite`   | SQLite backend with optional SQLCipher encryption                  |
 | `eventcore-memory`   | Zero-dependency in-memory store for tests and development          |
+| `eventcore-fs`       | File-based EventStore with deterministic git-merge reconciliation  |
 | `eventcore-testing`  | Contract tests, chaos harness, `EventCollector`, `TestScenario`    |
 | `eventcore-examples` | Integration tests demonstrating EventCore patterns                 |
 
@@ -202,7 +203,8 @@ least one test.
 
 ### Pre-Commit Hooks
 
-Pre-commit hooks are enforced via `.pre-commit-config.yaml` and lefthook. They
+Pre-commit hooks are enforced via the pre-commit framework
+(`.pre-commit-config.yaml`). They
 run formatting, linting, and dependency checks automatically on each commit.
 Keep hooks green before pushing.
 

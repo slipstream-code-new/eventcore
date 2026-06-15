@@ -244,7 +244,7 @@ mod command_builders {
 
     pub fn from_v1_request(req: v1::CreateTaskRequest) -> Result<CreateTask, ApiError> {
         Ok(CreateTask {
-            task_id: StreamId::from(format!("task-{}", TaskId::new())),
+            task_id: StreamId::try_new(format!("task-{}", TaskId::new()))?,
             title: TaskTitle::try_new(req.title)?,
             description: TaskDescription::try_new(req.description)?,
             assigned_to: vec![UserId::try_new(req.assigned_to)?],
@@ -255,7 +255,7 @@ mod command_builders {
 
     pub fn from_v2_request(req: v2::CreateTaskRequest) -> Result<CreateTask, ApiError> {
         Ok(CreateTask {
-            task_id: StreamId::from(format!("task-{}", TaskId::new())),
+            task_id: StreamId::try_new(format!("task-{}", TaskId::new()))?,
             title: TaskTitle::try_new(req.title)?,
             description: TaskDescription::try_new(req.description)?,
             assigned_to: req.assigned_to

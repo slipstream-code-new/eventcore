@@ -29,14 +29,14 @@
 14. Integration tests must read like docs — Given/When/Then comments, only public APIs, no private hooks or mocks of internals.
 15. Duplication inside tests is acceptable when it mirrors how downstream users compose commands and stores.
 16. Prefer existing tracing/logging helpers over ad-hoc `println!` debugging noise.
-17. All work items are tracked in **Forgejo Issues** at `git.johnwilger.com/jwilger/eventcore`; use the `tea` CLI or direct REST calls for automation.
+17. All work items are tracked in **Forgejo Issues** at `git.johnwilger.com/Slipstream/eventcore`; use the `tea` CLI or direct REST calls for automation.
 18. Keep pre-commit hooks green: rerun fmt/clippy/nextest locally until clean before committing.
 19. Use Conventional Commits for all git commit messages and PR titles (type/scope: summary) so history stays machine-readable.
 
 ## Issue Tracking with Forgejo Issues
 
 **IMPORTANT**: This project uses **Forgejo Issues** for ALL issue tracking,
-hosted at `git.johnwilger.com/jwilger/eventcore`.
+hosted at `git.johnwilger.com/Slipstream/eventcore`.
 
 ### Labels
 
@@ -62,8 +62,10 @@ hosted at `git.johnwilger.com/jwilger/eventcore`.
 
 The `tea` CLI (Forgejo's official client) is the recommended interface. It
 must be configured once with a Forgejo PAT via `tea login add`. Direct
-`curl` calls to `/api/v1/repos/jwilger/eventcore/...` are equivalent and
-work without `tea` installed.
+`curl` calls to `/api/v1/repos/Slipstream/eventcore/...` are equivalent and
+work without `tea` installed. Use the canonical `Slipstream/eventcore` path:
+`jwilger/eventcore` 301-redirects, and a POST following that redirect becomes
+a GET, so write operations silently fail.
 
 **Check for work:**
 

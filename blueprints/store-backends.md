@@ -159,13 +159,13 @@ for distributed projector coordination, connection pooling.
 
 ```toml
 # Development (default)
-eventcore = "0.6"
+eventcore = "1"
 
 # Production with PostgreSQL
-eventcore = { version = "0.6", features = ["postgres"] }
+eventcore = { version = "1", features = ["postgres"] }
 
 # Embedded with SQLite
-eventcore = { version = "0.6", features = ["sqlite"] }
+eventcore = { version = "1", features = ["sqlite"] }
 ```
 
 ## Files

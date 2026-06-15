@@ -54,7 +54,7 @@ impl FsConfig {
 }
 
 /// Resolved paths under a store root. Only `events/` is committed to git;
-/// `tmp/` and `.eventcore/` (and the `.lock` file) are derived/local.
+/// `tmp/`, `index/`, and `.eventcore/` (and the `.lock` file) are derived/local.
 #[derive(Debug, Clone)]
 pub(crate) struct Roots {
     pub(crate) root: PathBuf,

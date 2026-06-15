@@ -1,5 +1,7 @@
 # EventCore Observability Integration Design
 
+> Historical design note (archived). The "Current State" described below reflects an earlier internal metrics/tracing prototype that is not part of the shipped public API (there is no `eventcore::monitoring` module). Also note `PostgresEventStore::new` takes a connection string (`impl Into<String>`); use `PostgresEventStore::with_config` for a `PostgresConfig`, not a config object.
+
 ## Overview
 
 EventCore already has comprehensive internal metrics and tracing infrastructure. This design document outlines the approach to integrate EventCore with popular observability tools like OpenTelemetry and Prometheus, allowing users to export metrics and traces to their preferred monitoring backends.

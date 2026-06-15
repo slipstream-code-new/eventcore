@@ -21,7 +21,7 @@ EventCore testing follows these principles:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::{execute, RetryPolicy, CommandError, run_projection, StreamId};
+    use eventcore::{execute, ProjectionConfig, RetryPolicy, CommandError, run_projection, StreamId};
     use eventcore_memory::InMemoryEventStore;
     use eventcore_testing::EventCollector;
     use std::sync::{Arc, Mutex};
@@ -46,7 +46,7 @@ mod tests {
         // Then: Verify events via EventCollector projection
         let storage: Arc<Mutex<Vec<TaskEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let collector = EventCollector::new(storage.clone());
-        run_projection(collector, &store).await.unwrap();
+        run_projection(collector, &store, ProjectionConfig::default()).await.unwrap();
 
         let events = storage.lock().unwrap();
         assert_eq!(events.len(), 1);
@@ -87,11 +87,13 @@ mod tests {
 
         let result = execute(&store, duplicate, RetryPolicy::new()).await;
 
-        // Then: Should fail with BusinessRuleViolation
+        // Then: Should fail with BusinessRuleViolation. The variant wraps a
+        // `Box<dyn std::error::Error>`, so render it with `.to_string()` before
+        // inspecting the message.
         assert!(result.is_err());
         match result.unwrap_err() {
-            CommandError::BusinessRuleViolation(msg) => {
-                assert!(msg.contains("already exists"));
+            CommandError::BusinessRuleViolation(err) => {
+                assert!(err.to_string().contains("already exists"));
             }
             other => panic!("Expected BusinessRuleViolation, got: {:?}", other),
         }
@@ -129,7 +131,7 @@ async fn test_assign_task_multi_stream() {
     // Then: Events from both streams can be collected
     let storage: Arc<Mutex<Vec<SystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, &store).await.unwrap();
+    run_projection(collector, &store, ProjectionConfig::default()).await.unwrap();
 
     let events = storage.lock().unwrap();
     // Should have events from both the task and user streams
@@ -165,7 +167,7 @@ async fn test_projection_via_execute_and_run() {
 
     // When: Running the projection
     let projection = UserTaskListProjection::default();
-    run_projection(projection, &store).await.unwrap();
+    run_projection(projection, &store, ProjectionConfig::default()).await.unwrap();
 
     // Then: The projection state reflects the commands executed
     // (In practice, you'd use EventCollector or inspect projection state
@@ -198,7 +200,7 @@ async fn test_statistics_projection_accuracy() {
     // When: Running an EventCollector to gather events
     let storage: Arc<Mutex<Vec<SystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, &store).await.unwrap();
+    run_projection(collector, &store, ProjectionConfig::default()).await.unwrap();
 
     // Then: All 10 creation events were captured
     let events = storage.lock().unwrap();
@@ -211,6 +213,7 @@ async fn test_statistics_projection_accuracy() {
 EventCore works well with property-based testing:
 
 ```rust
+use eventcore::{Projector, StreamPosition};
 use proptest::prelude::*;
 
 proptest! {
@@ -220,29 +223,33 @@ proptest! {
         user_count in 1..10usize,
         assignment_ratio in 0.0..1.0f64,
     ) {
-        // Property: Total assigned tasks equals sum of user assignments
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.block_on(async {
-            let mut projection = UserTaskListProjection::default();
-            let users = generate_users(user_count);
-            let tasks = generate_tasks(task_count);
+        // Property: Total assigned tasks equals sum of user assignments.
+        //
+        // `Projector::apply` is synchronous and takes the event by value plus
+        // the event's `StreamPosition` and a mutable context. Build the test
+        // events with your own helpers (omitted here for brevity).
+        let mut projection = UserTaskListProjection::default();
+        let users = generate_users(user_count);
+        let tasks = generate_tasks(task_count);
 
-            // Assign tasks based on ratio
-            let assignments = assign_tasks_to_users(&tasks, &users, assignment_ratio);
+        // Assign tasks based on ratio
+        let assignments = assign_tasks_to_users(&tasks, &users, assignment_ratio);
 
-            // Apply events
-            for event in assignments {
-                projection.apply(&event).await.unwrap();
-            }
+        // Apply events directly to the projector. `StreamPosition` wraps a
+        // timestamp-ordered UUID; construct one with `StreamPosition::new`.
+        let mut ctx = ();
+        for event in assignments {
+            let position = StreamPosition::new(uuid::Uuid::now_v7());
+            projection.apply(event, position, &mut ctx).unwrap();
+        }
 
-            // Verify consistency
-            let total_assigned: usize = users.iter()
-                .map(|u| projection.get_user_tasks(u).len())
-                .sum();
+        // Verify consistency
+        let total_assigned: usize = users.iter()
+            .map(|u| projection.get_user_tasks(u).len())
+            .sum();
 
-            let expected_assigned = (task_count as f64 * assignment_ratio) as usize;
-            assert_eq!(total_assigned, expected_assigned);
-        });
+        let expected_assigned = (task_count as f64 * assignment_ratio) as usize;
+        assert_eq!(total_assigned, expected_assigned);
     }
 }
 ```
@@ -286,7 +293,7 @@ async fn test_complete_task_workflow() {
     // Then: Collect all events to verify the workflow
     let storage: Arc<Mutex<Vec<SystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, &store).await.unwrap();
+    run_projection(collector, &store, ProjectionConfig::default()).await.unwrap();
 
     let events = storage.lock().unwrap();
     // Should have events from create, assign, and complete
@@ -306,34 +313,40 @@ rewriting the same scenario tests. Add the `eventcore-testing` crate to your
 
 ```toml
 [dev-dependencies]
-eventcore-testing = "0.1"
+eventcore-testing = "1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Then invoke the macro from `eventcore_testing::contract` in an integration test:
+Then invoke the `backend_contract_tests!` macro (exported at the crate root,
+`eventcore_testing::backend_contract_tests`) in an integration test:
 
 ```rust
-use eventcore_testing::contract::event_store_contract_tests;
+use eventcore_testing::backend_contract_tests;
 
-// Generates three #[tokio::test] functions that exercise the store.
-event_store_contract_tests! {
+// Generates the full backend contract test suite. You must provide a store
+// factory, a checkpoint-store factory, and a coordinator factory.
+backend_contract_tests! {
     suite = postgres_backend,
     make_store = || MyPostgresEventStore::test_instance(),
+    make_checkpoint_store = || MyPostgresCheckpointStore::test_instance(),
+    make_coordinator = || MyPostgresCoordinator::test_instance(),
 }
 ```
 
-The macro emits three async tests:
+The macro generates one `#[tokio::test]` per contract scenario, including:
 
 - `basic_read_write_contract` – verifies a store can append and read a single
   stream without data loss.
 - `concurrent_version_conflicts_contract` – appends twice with a stale expected
-  version and expects `EventStoreError::VersionConflict`.
+  version and expects a version conflict.
 - `stream_isolation_contract` – writes events to multiple streams in one batch
   and ensures reads never bleed across stream boundaries.
 
-Failures return structured error messages (scenario + detail) so implementors
-can pinpoint missing behaviors quickly. Running these tests in CI fulfills ADR-013
-and ADR-015’s requirement that every backend prove semantic correctness.
+Additional generated tests cover checkpoint storage, leader-election
+coordination, stream-prefix/pattern filtering, and ordering. When new contract
+tests are added to `eventcore-testing`, they run automatically for every backend
+that uses this macro. Running these tests in CI fulfills ADR-013 and ADR-015’s
+requirement that every backend prove semantic correctness.
 
 ### EventCollector Pattern
 
@@ -355,7 +368,7 @@ async fn test_with_event_collector() {
     // Collect events via projection
     let storage: Arc<Mutex<Vec<MyEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, &store).await.unwrap();
+    run_projection(collector, &store, ProjectionConfig::default()).await.unwrap();
 
     // Assert on collected events
     let events = storage.lock().unwrap();
@@ -507,7 +520,7 @@ async fn test_with_debugging() {
     // Then: Collect all events for debugging
     let storage: Arc<Mutex<Vec<MyEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, &store).await.unwrap();
+    run_projection(collector, &store, ProjectionConfig::default()).await.unwrap();
 
     let events = storage.lock().unwrap();
     for event in events.iter() {

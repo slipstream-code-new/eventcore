@@ -1,5 +1,7 @@
 # PostgreSQL Connection Pool Tuning Guide
 
+> **Historical (archived).** This describes a previous PostgreSQL adapter API (`PostgresConfigBuilder`, pool monitoring, health checks) that no longer exists. The current adapter exposes only `PostgresConfig { max_connections, acquire_timeout, idle_timeout }` with constructors `PostgresEventStore::new(connection_string)`, `with_config(connection_string, config)`, and `from_pool(pool)`. Do not use these snippets as current guidance.
+
 This guide provides detailed information on tuning EventCore's PostgreSQL connection pool for optimal performance in production environments.
 
 ## Understanding Connection Pools

@@ -1,14 +1,15 @@
 # EventCore
 
-`eventcore` is a type-safe event sourcing library for Rust implementing multi-stream atomic event sourcing with dynamic consistency boundaries. It is a Rust Cargo workspace with 8 crates providing the core library, derive macros, multiple backend implementations, and a testing toolkit.
+`eventcore` is a type-safe event sourcing library for Rust implementing multi-stream atomic event sourcing with dynamic consistency boundaries. It is a Rust Cargo workspace with 8 published library crates (plus internal demo, bench, and stress tooling crates) providing the core library, derive macros, multiple backend implementations, and a testing toolkit.
 
 ## Workspace Structure
 
 - `eventcore` — Main library: `execute()`, `run_projection()`, public re-exports
 - `eventcore-types` — Shared vocabulary: traits (`EventStore`, `CommandLogic`) and types
-- `eventcore-macros` — `#[derive(Command)]`, `require!`, `emit!` macro implementations
+- `eventcore-macros` — `#[derive(Command)]` derive macro implementation (the `require!` macro is exported from the `eventcore` crate, not here)
 - `eventcore-postgres` — PostgreSQL backend with ACID transactions and advisory locks
 - `eventcore-sqlite` — SQLite backend with optional SQLCipher encryption
+- `eventcore-fs` — File-based, git-mergeable event store adapter
 - `eventcore-memory` — Zero-dependency in-memory store for tests and development
 - `eventcore-testing` — Contract tests, chaos harness, `EventCollector` for testing
 - `eventcore-examples` — Integration tests demonstrating EventCore patterns

@@ -17,17 +17,22 @@ Every EventStore backend must pass the same contract test suite. The chaos and d
 
 | Suite                | Tests | Verifies                                                                     |
 | -------------------- | ----- | ---------------------------------------------------------------------------- |
-| EventStore           | 5     | Read/write, version conflicts, stream isolation, atomicity                   |
-| EventReader          | 5     | Global ordering, position resumption, prefix filtering, batch limits         |
+| EventStore           | 6     | Read/write, version conflicts, stream isolation, atomicity, type mismatch    |
+| EventReader          | 8     | Global ordering, position resumption, prefix/pattern filtering, batch limits |
 | CheckpointStore      | 4     | Save/load, update overwrite, missing returns None, subscription independence |
 | ProjectorCoordinator | 4     | Leadership acquisition, blocking, independence, guard-drop release           |
 
 ### Usage
 
-The `backend_contract_tests!` macro generates all 18 tests for a backend:
+The `backend_contract_tests!` macro generates all 22 tests for a backend:
 
 ```rust
-backend_contract_tests!(postgres, || async { make_postgres_store().await });
+backend_contract_tests! {
+    suite = memory,
+    make_store = || InMemoryEventStore::new(),
+    make_checkpoint_store = || InMemoryEventStore::new(),
+    make_coordinator = || InMemoryEventStore::new(),
+}
 ```
 
 Each test uses UUID-based stream names for isolation — no test cleanup needed.
@@ -58,9 +63,10 @@ Use case: testing that retry loops handle a known conflict count correctly.
 `EventCollector<E>` implements `Projector` to accumulate events for assertion:
 
 ```rust
-let collector = EventCollector::<MyEvent>::new();
-run_projection(collector.clone(), &backend).await?;
-assert_eq!(collector.events(), expected);
+let storage = Arc::new(Mutex::new(Vec::new()));
+let collector = EventCollector::<MyEvent>::new(storage.clone());
+run_projection(collector, &backend, ProjectionConfig::default()).await?;
+assert_eq!(*storage.lock().unwrap(), expected);
 ```
 
 Infallible (Error = `Infallible`), suitable for any integration test.
@@ -69,7 +75,7 @@ Infallible (Error = `Infallible`), suitable for any integration test.
 
 | File                                       | Description                                                  |
 | ------------------------------------------ | ------------------------------------------------------------ |
-| `eventcore-testing/src/contract.rs`        | 18 contract test functions + `backend_contract_tests!` macro |
+| `eventcore-testing/src/contract.rs`        | 22 contract test functions + `backend_contract_tests!` macro |
 | `eventcore-testing/src/chaos.rs`           | ChaosEventStore, ChaosConfig, probability types              |
 | `eventcore-testing/src/deterministic.rs`   | DeterministicConflictStore                                   |
 | `eventcore-testing/src/event_collector.rs` | EventCollector projector                                     |

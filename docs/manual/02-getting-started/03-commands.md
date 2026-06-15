@@ -63,11 +63,16 @@ impl CommandLogic for CreateTask {
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        // Business rule: Can't create a task that already exists
+        // Business rule: Can't create a task that already exists.
+        //
+        // `CommandError::business_rule_violated` takes a value implementing
+        // `std::error::Error`. For string messages, use the `From<String>` /
+        // `From<&str>` conversions instead (shown here via `.into()`). In real
+        // code, prefer a typed `thiserror` error enum.
         if state.exists() {
-            return Err(CommandError::business_rule_violated(
-                format!("Task {} already exists", self.task_id.as_ref())
-            ));
+            return Err(
+                format!("Task {} already exists", self.task_id.as_ref()).into()
+            );
         }
 
         // Generate the TaskCreated event
@@ -96,6 +101,7 @@ impl CommandLogic for CreateTask {
 4. **handle() method** contains your business logic and returns `Result<NewEvents<Self::Event>, CommandError>`
 
 5. **execute() free function** runs the command: `execute(&store, command, RetryPolicy::new()).await?`
+   (`execute` takes the store, the command, and a `RetryPolicy` — three arguments)
 
 ## Multi-Stream Command: Assign Task
 
@@ -179,15 +185,17 @@ impl CommandLogic for AssignTask {
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        // Validate business rules
+        // Validate business rules. `CommandError` implements `From<&str>` and
+        // `From<String>`, so string messages convert with `.into()`. In
+        // production, prefer a typed `thiserror` error enum.
         if !state.task_exists {
-            return Err(CommandError::business_rule_violated("Cannot assign non-existent task"));
+            return Err("Cannot assign non-existent task".into());
         }
         if state.task_status == TaskStatus::Completed {
-            return Err(CommandError::business_rule_violated("Cannot assign completed task"));
+            return Err("Cannot assign completed task".into());
         }
         if state.task_status == TaskStatus::Cancelled {
-            return Err(CommandError::business_rule_violated("Cannot assign cancelled task"));
+            return Err("Cannot assign cancelled task".into());
         }
 
         let now = Utc::now();
@@ -302,23 +310,23 @@ impl CommandLogic for CompleteTask {
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        // Business rules
+        // Business rules. `CommandError` implements `From<&str>`, so string
+        // messages convert with `.into()`. In production, prefer a typed
+        // `thiserror` error enum.
         if !state.task_exists {
-            return Err(CommandError::business_rule_violated("Cannot complete non-existent task"));
+            return Err("Cannot complete non-existent task".into());
         }
         if state.task_status == TaskStatus::Completed {
-            return Err(CommandError::business_rule_violated("Task is already completed"));
+            return Err("Task is already completed".into());
         }
         if state.task_status == TaskStatus::Cancelled {
-            return Err(CommandError::business_rule_violated("Cannot complete cancelled task"));
+            return Err("Cannot complete cancelled task".into());
         }
 
         // Only assigned user can complete (or admin)
         if let Some(assignee) = &state.assignee {
             if assignee != &self.completed_by && self.completed_by.as_ref() != "admin" {
-                return Err(CommandError::business_rule_violated(
-                    "Only assigned user or admin can complete task"
-                ));
+                return Err("Only assigned user or admin can complete task".into());
             }
         }
 
@@ -388,7 +396,7 @@ mod command_tests {
     use super::*;
     use crate::domain::commands::*;
     use crate::domain::types::*;
-    use eventcore::{execute, RetryPolicy, run_projection};
+    use eventcore::{execute, ProjectionConfig, RetryPolicy, run_projection};
     use eventcore_memory::InMemoryEventStore;
     use eventcore_testing::EventCollector;
     use std::sync::{Arc, Mutex};
@@ -413,7 +421,7 @@ mod command_tests {
         // Then: Events are written (verify via projection)
         let storage: Arc<Mutex<Vec<TaskEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let collector = EventCollector::new(storage.clone());
-        run_projection(collector, &store).await.unwrap();
+        run_projection(collector, &store, ProjectionConfig::default()).await.unwrap();
 
         let events = storage.lock().unwrap();
         assert_eq!(events.len(), 1);

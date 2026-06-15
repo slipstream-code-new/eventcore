@@ -121,7 +121,7 @@ impl Projector for MyTasksProjection {
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
         match &event {
-            TaskEvent::TaskAssigned { user_id, .. } => {
+            TaskEvent::Assigned { user_id, .. } => {
                 // Update tasks_by_user
             }
             // ... handle other events
@@ -233,7 +233,7 @@ Your discovered events:
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum TaskEvent {
     Created { title: String, description: String },
-    Assigned { user_id: UserId },
+    Assigned { user_id: UserId, task_id: TaskId },
     Completed { completed_at: Timestamp },
     CommentAdded { author: UserId, text: String },
 }

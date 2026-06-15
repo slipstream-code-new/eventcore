@@ -1,5 +1,7 @@
 # EventCore Performance Benchmarks
 
+> **Historical archive.** This document records a past optimization effort and is not maintained. Source paths, commands, and module names referenced below (e.g. `eventcore/src/executor.rs`, `eventcore/src/state_reconstruction.rs`) reflect the codebase at the time and may no longer exist or match the current API.
+
 This document contains performance benchmarking results and optimization analysis for the EventCore library.
 
 ## Phase 11.2: Performance Optimization Results

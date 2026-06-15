@@ -30,9 +30,9 @@ Traditional event sourcing forces you into rigid aggregate boundaries. EventCore
 ```toml
 # Cargo.toml
 [dependencies]
-eventcore = "0.9"
+eventcore = "1.0"
 # The in-memory store used below is a separate crate:
-eventcore-memory = "0.9"
+eventcore-memory = "1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -117,9 +117,9 @@ struct TransferMoney {
 }
 
 // Automatically generates:
-// - TransferMoneyStreamSet phantom type for compile-time stream safety
-// - Helper method __derive_read_streams() for stream extraction
-// - Enables type Input = Self pattern for simple commands
+// - impl CommandStreams for TransferMoney, whose stream_declarations()
+//   returns the StreamIds from every #[stream] field (here from_account
+//   and to_account), establishing the command's atomic consistency boundary
 ```
 
 ### Dynamic Stream Discovery
@@ -131,7 +131,7 @@ impl CommandLogic for ProcessPayment {
     type State = CheckoutState;
     type Event = CheckoutEvent;
 
-    fn stream_resolver(&self) -> Option<&dyn StreamResolver<Self::State>> {
+    fn stream_resolver(&self) -> Option<&(dyn StreamResolver<Self::State> + Sync)> {
         Some(self)
     }
 
@@ -160,6 +160,7 @@ eventcore-macros/       # Derive macros (re-exported by eventcore)
 eventcore-postgres/     # PostgreSQL adapter (enabled via feature flag)
 eventcore-sqlite/       # SQLite adapter with optional SQLCipher encryption
 eventcore-memory/       # In-memory store for tests and development
+eventcore-fs/           # File-based git-mergeable store (FileEventStore::open)
 eventcore-testing/      # Contract tests, EventCollector, TestScenario
 eventcore-examples/     # Integration test examples
 ```
@@ -174,23 +175,26 @@ eventcore-examples/     # Integration test examples
 
 ```toml
 # Default (includes macros)
-eventcore = "0.6"
+eventcore = "1.0"
 
 # With PostgreSQL adapter
-eventcore = { version = "0.6", features = ["postgres"] }
+eventcore = { version = "1.0", features = ["postgres"] }
 
 # Without macros (rare - for minimal builds)
-eventcore = { version = "0.6", default-features = false }
+eventcore = { version = "1.0", default-features = false }
 ```
 
 ## Examples
 
-See [eventcore-examples/](eventcore-examples/) for complete working examples:
+See [eventcore-examples/tests/](eventcore-examples/tests/) for working
+integration test examples (banking-style deposit/withdraw commands):
 
-- **Banking**: Account transfers with balance tracking
-- **E-commerce**: Order workflow with inventory management
-- **Sagas**: Order fulfillment with distributed transaction coordination
-- **Web Framework Integration**: REST API with Axum (task management system)
+- **Multi-stream atomic transfers** (`multi_stream_atomic_test`): atomic reads
+  and writes across multiple account streams
+- **Retry policy** (`retry_policy_test`): optimistic-concurrency retry behavior
+- **BDD scenario** (`scenario_test`): given/when/then-style command flows
+- **Single-stream command** (`single_stream_command_test`): the minimal
+  single-stream case
 
 ## Documentation
 

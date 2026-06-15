@@ -35,8 +35,8 @@ We take the security of EventCore seriously. If you believe you have found a sec
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.6.x   | :white_check_mark: |
-| < 0.6   | :x:                |
+| 1.x     | :white_check_mark: |
+| < 1.0   | :x:                |
 
 ## Security Considerations for Contributors
 
@@ -117,13 +117,21 @@ EventCore doesn't provide built-in authorization. Implement access control at th
 
 ```rust
 // Implement authorization before command execution
-async fn handle_command(cmd: Command, user: AuthenticatedUser) -> Result<()> {
+async fn handle_command(
+    store: impl EventStore,
+    cmd: MyCommand,
+    user: AuthenticatedUser,
+) -> Result<ExecutionResponse, CommandError> {
     // Check user permissions for the affected streams
     if !user.can_access_stream(&cmd.stream_id()) {
-        return Err(CommandError::Unauthorized);
+        // EventCore has no `Unauthorized` variant; surface a domain
+        // authorization error as a business rule violation (or `.into()`
+        // a `&str`/`String` message).
+        return Err("unauthorized: user cannot access stream".into());
     }
 
-    executor.execute(cmd).await
+    // `execute` is a free function, not a method on an executor.
+    execute(store, cmd, RetryPolicy::new()).await
 }
 ```
 

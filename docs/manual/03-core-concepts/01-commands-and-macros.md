@@ -369,16 +369,16 @@ fn handle(&self, mut state: Self::State) -> Result<NewEvents<Self::Event>, Comma
 #[test]
 fn test_command_stream_declaration() {
     let cmd = TransferMoney {
-        from_account: StreamId::from_static("account-1"),
-        to_account: StreamId::from_static("account-2"),
+        from_account: StreamId::try_new("account-1").unwrap(),
+        to_account: StreamId::try_new("account-2").unwrap(),
         amount: 100,
         reference: "test".to_string(),
     };
 
     let streams = cmd.stream_declarations();
     assert_eq!(streams.len(), 2);
-    assert!(streams.iter().any(|id| id == &StreamId::from_static("account-1")));
-    assert!(streams.iter().any(|id| id == &StreamId::from_static("account-2")));
+    assert!(streams.iter().any(|id| id == &StreamId::try_new("account-1").unwrap()));
+    assert!(streams.iter().any(|id| id == &StreamId::try_new("account-2").unwrap()));
 }
 ```
 

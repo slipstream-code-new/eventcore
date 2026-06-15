@@ -2,11 +2,32 @@
 
 Effective monitoring is crucial for operating EventCore applications in production. This chapter covers comprehensive observability strategies including metrics, logging, tracing, and alerting.
 
+> **What EventCore provides vs. what your application owns.** EventCore does
+> not ship a metrics registry, a Prometheus exporter, a logging configuration,
+> or a CLI. There is no `eventcore::monitoring` module and EventCore reads no
+> environment variables. Instead, EventCore gives you two integration points
+> and stays out of your way:
+>
+> - **`tracing` spans.** `execute()` is annotated with `#[tracing::instrument]`,
+>   so command execution already emits spans you can subscribe to with any
+>   `tracing-subscriber` layer.
+> - **The `MetricsHook` trait.** Implement it and attach it with
+>   `RetryPolicy::with_metrics_hook(...)` to observe the retry lifecycle
+>   (which streams retried, the attempt number, and the backoff delay).
+>
+> Everything else in this chapter — Prometheus counters, log shipping,
+> OpenTelemetry wiring, dashboards, alert rules — is **application-level code
+> you write around EventCore**. The examples below are illustrative scaffolding
+> for your service, not APIs exported by the library.
+
 ## Metrics Collection
 
-### Prometheus Integration
+### Prometheus Integration (application-level)
 
-EventCore provides built-in Prometheus metrics:
+EventCore has no built-in Prometheus support, but it is straightforward to
+define your own metrics in the [`prometheus`](https://crates.io/crates/prometheus)
+crate and update them from the code that wraps `eventcore::execute()`. The
+following `MetricsService` is **application code** — adapt it to your service:
 
 ```rust
 use prometheus::{
@@ -31,6 +52,13 @@ lazy_static! {
     static ref COMMAND_ERRORS: Counter = register_counter!(
         "eventcore_command_errors_total",
         "Total number of command execution errors"
+    ).unwrap();
+
+    // Number of attempts a command needed before committing, as reported by
+    // ExecutionResponse::attempts() (1 = first-try success, >1 = retries).
+    static ref COMMAND_ATTEMPTS: Histogram = register_histogram!(
+        "eventcore_command_attempts",
+        "Execution attempts per command (1 = no retries)"
     ).unwrap();
 
     // Event store metrics
@@ -99,6 +127,14 @@ impl MetricsService {
         }
     }
 
+    pub fn record_command_attempts(&self, command_type: &str, attempts: u32) {
+        // ExecutionResponse::attempts() is the single piece of execution
+        // metadata EventCore returns; record it for retry observability.
+        COMMAND_ATTEMPTS
+            .with_label_values(&[command_type])
+            .observe(f64::from(attempts));
+    }
+
     pub fn record_events_written(&self, stream_id: &str, count: usize) {
         EVENTS_WRITTEN.with_label_values(&[stream_id]).inc_by(count as f64);
     }
@@ -154,9 +190,9 @@ pub async fn metrics_handler(
 }
 ```
 
-### Custom Metrics
+### Custom Metrics (application-level)
 
-Define application-specific metrics:
+Define application-specific metrics the same way:
 
 ```rust
 use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, HistogramVec};
@@ -210,21 +246,29 @@ impl BusinessMetrics {
 }
 ```
 
-### Automatic Instrumentation
+### Automatic Instrumentation (application-level)
 
-Instrument EventCore operations automatically:
+The cleanest way to instrument command execution is to wrap the free-function
+`eventcore::execute()` API in a helper of your own. Note the real signature:
+`execute()` takes the store and command **by value** (`store: S`, `command: C`),
+so the store must be cheaply cloneable (the built-in stores are `Clone`):
 
 ```rust
 use std::time::Instant;
+use eventcore::{execute, CommandLogic, ExecutionResponse, RetryPolicy, CommandError};
+use eventcore_types::EventStore; // EventStore is not re-exported from the eventcore facade
 
-// Instrumented command execution using the free-function execute() API.
-// Wrap your calls to execute() with timing and metrics.
-pub async fn execute_instrumented<C: CommandLogic>(
-    store: &impl EventStore,
+// Instrumented command execution wrapping the free-function execute() API.
+pub async fn execute_instrumented<C, S>(
+    store: S,
     command: C,
     policy: RetryPolicy,
     metrics: &MetricsService,
-) -> Result<ExecutionResponse, CommandError> {
+) -> Result<ExecutionResponse, CommandError>
+where
+    C: CommandLogic,
+    S: EventStore,
+{
     let start = Instant::now();
     let command_type = std::any::type_name::<C>();
 
@@ -234,8 +278,44 @@ pub async fn execute_instrumented<C: CommandLogic>(
 
     metrics.record_command_executed(command_type, duration, success);
 
+    // On success, `ExecutionResponse::attempts()` reports how many tries the
+    // command needed (1 = committed on the first attempt; >1 = optimistic
+    // concurrency retries occurred). That is the only metadata it exposes.
+    if let Ok(response) = &result {
+        metrics.record_command_attempts(command_type, response.attempts());
+    }
+
     result
 }
+```
+
+For visibility into the **retry lifecycle specifically**, implement the
+`MetricsHook` trait and attach it to your `RetryPolicy`. EventCore invokes the
+hook before each retry attempt, passing a `RetryContext`:
+
+```rust
+use std::sync::atomic::{AtomicU64, Ordering};
+use eventcore::{MetricsHook, RetryContext, RetryPolicy};
+
+struct RetryMetricsHook {
+    retries: AtomicU64,
+}
+
+impl MetricsHook for RetryMetricsHook {
+    fn on_retry_attempt(&self, ctx: &RetryContext) {
+        // RetryContext exposes the public fields:
+        //   ctx.streams: Vec<StreamId>   (the streams being retried)
+        //   ctx.attempt: AttemptNumber   (1-based attempt counter)
+        //   ctx.delay_ms: DelayMilliseconds (backoff before this attempt)
+        self.retries.fetch_add(1, Ordering::Relaxed);
+        // Forward to your metrics backend, e.g. a Prometheus counter:
+        // COMMAND_RETRIES.with_label_values(&[...]).inc();
+    }
+}
+
+let policy = RetryPolicy::new()
+    .max_retries(2)
+    .with_metrics_hook(RetryMetricsHook { retries: AtomicU64::new(0) });
 ```
 
 ## Structured Logging
@@ -284,25 +364,40 @@ pub fn init_logging(log_level: &str, log_format: &str) -> Result<(), Box<dyn std
     Ok(())
 }
 
-// Structured logging for command execution
+// Structured logging for command execution (application-level wrapper).
+//
+// `execute()` takes the store and command by value, so the helper is generic
+// over the store type `S`. `EventStore` lives in `eventcore_types` (it is not
+// re-exported from the `eventcore` facade).
 #[instrument(skip(command, store), fields(command_type = %std::any::type_name::<C>()))]
-pub async fn execute_command_with_logging<C: CommandLogic>(
+pub async fn execute_command_with_logging<C, S>(
     command: C,
-    store: &impl EventStore,
-) -> Result<ExecutionResponse, CommandError> {
+    store: S,
+) -> Result<ExecutionResponse, CommandError>
+where
+    C: CommandLogic,
+    S: eventcore_types::EventStore,
+{
     debug!("Starting command execution");
 
     let result = execute(store, command, RetryPolicy::new()).await;
 
     match &result {
-        Ok(execution_result) => {
+        Ok(response) => {
+            // ExecutionResponse exposes a single accessor: attempts(). It has
+            // no events or streams fields — EventCore does not surface the
+            // written events from execute(). If you need the events a command
+            // produced, read them back with the store's read_stream() API.
             info!(
-                events_written = execution_result.events_written.len(),
-                affected_streams = execution_result.affected_streams.len(),
+                attempts = response.attempts(),
                 "Command executed successfully"
             );
         }
         Err(error) => {
+            // CommandError carries its source chain; `%error` renders its
+            // Display message (a human-readable string). Variants:
+            // BusinessRuleViolation (transparent — renders the wrapped command
+            // error's own message), ConcurrencyError, EventStoreError, ValidationError.
             error!(
                 error = %error,
                 "Command execution failed"
@@ -312,41 +407,17 @@ pub async fn execute_command_with_logging<C: CommandLogic>(
 
     result
 }
-
-// Event store logging
-#[instrument(skip(events), fields(event_count = events.len()))]
-pub async fn write_events_with_logging(
-    events: Vec<EventToWrite>,
-    event_store: &dyn EventStore,
-) -> EventStoreResult<WriteResult> {
-    debug!("Writing events to store");
-
-    let stream_ids: Vec<_> = events.iter()
-        .map(|e| e.stream_id.to_string())
-        .collect();
-
-    let result = event_store.write_events(events).await;
-
-    match &result {
-        Ok(write_result) => {
-            info!(
-                events_written = write_result.events_written,
-                streams = ?stream_ids,
-                "Events written successfully"
-            );
-        }
-        Err(error) => {
-            error!(
-                error = %error,
-                streams = ?stream_ids,
-                "Failed to write events"
-            );
-        }
-    }
-
-    result
-}
 ```
+
+> **There is no separate "write events" entry point to log.** Application code
+> never appends events directly. A command's `handle()` returns `NewEvents` and
+> `execute()` appends them atomically with optimistic-concurrency checks. The
+> low-level `EventStore::append_events(StreamWrites)` /
+> `read_stream(StreamId) -> EventStream` methods are the backend contract —
+> they are exercised by `execute()`, not called from handlers. To observe the
+> write path, instrument your `execute()` wrapper (above) or use the
+> `MetricsHook` for retry visibility; there is no `EventToWrite`,
+> `WriteResult`, or `write_events()` API.
 
 ### Log Aggregation
 
@@ -406,7 +477,13 @@ data:
 
 ## Distributed Tracing
 
-### OpenTelemetry Integration
+EventCore's `execute()` is annotated with `#[tracing::instrument]`, so it emits
+a span named `execute` automatically. The wiring below is **application-level**
+OpenTelemetry setup that subscribes to those spans (plus your own). EventCore
+itself reads no environment variables — the `ENVIRONMENT` lookup below is your
+service's own configuration, not something the library consumes.
+
+### OpenTelemetry Integration (application-level)
 
 ```rust
 use opentelemetry::{
@@ -451,22 +528,27 @@ pub fn init_tracing(service_name: &str, otlp_endpoint: &str) -> Result<(), Trace
     Ok(())
 }
 
-// Traced command execution
+// Traced command execution (application-level wrapper).
 #[tracing::instrument(skip(command, store), fields(command_id = %uuid::Uuid::new_v4()))]
-pub async fn execute_command_traced<C: CommandLogic>(
+pub async fn execute_command_traced<C, S>(
     command: C,
-    store: &impl EventStore,
-) -> Result<ExecutionResponse, CommandError> {
+    store: S,
+) -> Result<ExecutionResponse, CommandError>
+where
+    C: CommandLogic,
+    S: eventcore_types::EventStore,
+{
     let span = tracing::Span::current();
     span.record("command.type", std::any::type_name::<C>());
 
     let result = execute(store, command, RetryPolicy::new()).await;
 
     match &result {
-        Ok(execution_result) => {
+        Ok(response) => {
             span.record("command.success", true);
-            span.record("events.count", execution_result.events_written.len());
-            span.record("streams.count", execution_result.affected_streams.len());
+            // The only execution metadata available is the attempt count.
+            // ExecutionResponse does not expose written events or streams.
+            span.record("command.attempts", response.attempts());
         }
         Err(error) => {
             span.record("command.success", false);
@@ -535,6 +617,11 @@ impl<'a> opentelemetry::propagation::Extractor for HeaderMapCarrier<'a> {
 ```
 
 ## Alerting
+
+The alert rules below reference the `eventcore_*` Prometheus series **your
+application** exposes (defined in the Metrics Collection section). They are not
+emitted by the library itself — adjust the metric names to match whatever your
+`MetricsService` registers.
 
 ### Prometheus Alerting Rules
 
@@ -667,6 +754,9 @@ receivers:
 
 ## Grafana Dashboards
 
+The dashboard JSON below queries the same application-defined `eventcore_*`
+metrics. Tailor the panel queries to the series your service actually exports.
+
 ### EventCore Operations Dashboard
 
 ```json
@@ -755,7 +845,13 @@ receivers:
 
 ## Performance Monitoring
 
-### Real-Time Performance Metrics
+### Real-Time Performance Metrics (application-level)
+
+The `PerformanceMonitor` below is **application code** that aggregates the
+Prometheus metrics your service defines (see the Metrics Collection section).
+EventCore does not provide a `PerformanceMonitor`, `PerformanceSnapshot`, or any
+metrics-aggregation type — this is a pattern you implement on top of your own
+metrics backend.
 
 ```rust
 use std::sync::Arc;
@@ -939,20 +1035,27 @@ impl Default for TrendAnalysis {
 
 ## Summary
 
-EventCore monitoring and metrics:
+Monitoring an EventCore application:
 
-- ✅ **Prometheus metrics** - Comprehensive system monitoring
-- ✅ **Structured logging** - Searchable, contextual logs
-- ✅ **Distributed tracing** - Request flow visibility
-- ✅ **Intelligent alerting** - Proactive issue detection
-- ✅ **Performance monitoring** - Real-time performance tracking
+- ✅ **`tracing` spans** - `execute()` is instrumented out of the box; subscribe
+  with any `tracing-subscriber` layer
+- ✅ **`MetricsHook` trait** - the library's hook for retry-lifecycle metrics,
+  attached via `RetryPolicy::with_metrics_hook(...)`
+- ✅ **Application-owned Prometheus metrics** - you define and export the
+  `eventcore_*` series; the library does not
+- ✅ **Structured logging** - wrap `execute()` to emit searchable, contextual logs
+- ✅ **Distributed tracing** - propagate context and export EventCore's spans
+- ✅ **Alerting & dashboards** - built on the metrics your service exposes
 
-Key components:
+What EventCore gives you vs. what you own:
 
-1. Export detailed Prometheus metrics for all operations
-2. Implement structured logging with correlation IDs
-3. Use distributed tracing for multi-service visibility
-4. Configure intelligent alerting with appropriate thresholds
-5. Build comprehensive dashboards for different audiences
+1. **EventCore provides:** `tracing` spans on `execute()`, the `MetricsHook`
+   trait, and `ExecutionResponse::attempts()` for retry counts.
+2. **You own:** the metrics registry/exporter, log subscriber configuration,
+   OpenTelemetry wiring, alert rules, and dashboards.
+3. There is no `eventcore::monitoring` module, no built-in metrics registry, no
+   CLI, and no environment variables read by the library.
+4. The write path is always `handle() -> NewEvents` committed by `execute()` —
+   there is no separate `write_events`/`EventToWrite`/`WriteResult` API to log.
 
 Next, let's explore [Backup and Recovery](./03-backup-recovery.md) →

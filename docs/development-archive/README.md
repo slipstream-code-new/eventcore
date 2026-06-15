@@ -1,5 +1,7 @@
 # Development Archive
 
+> **Historical archive — not API reference.** These documents were written during EventCore's development and may describe APIs, type names, and behaviors that no longer match the released library. Do not rely on them for current usage; see the [EventCore User Manual](../manual/README.md) and `cargo doc` for the authoritative API.
+
 This directory contains development-related documentation that was created during the implementation of EventCore. These documents are preserved for historical reference but are not part of the user-facing manual.
 
 ## Contents

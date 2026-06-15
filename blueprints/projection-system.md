@@ -16,7 +16,7 @@ The projection system implements the "Q" side of CQRS. Projectors consume events
 ### Projection Flow
 
 ```
-run_projection(projector, backend)
+run_projection(projector, &backend, config)
   │
   ├── try_acquire(projector.name()) → leadership guard
   ├── load checkpoint → Option<StreamPosition>
@@ -116,6 +116,9 @@ Internal types (`PollConfig`, `EventRetryConfig`, `PollMode`) are not exposed;
 ```rust
 use std::time::Duration;
 use eventcore::{ProjectionConfig, run_projection};
+// MaxRetryAttempts is not re-exported from the eventcore facade; import it
+// from eventcore-types (add eventcore-types as a dependency).
+use eventcore_types::MaxRetryAttempts;
 
 // Batch mode with defaults
 run_projection(my_projector, &backend, ProjectionConfig::default()).await?;
@@ -149,7 +152,7 @@ also internal types.
 - ADR-028: Non-blocking advisory lock acquisition
 - ADR-029: Projection runner API simplification
 - ADR-030: Layered API surface for application vs. backend developers
-- ADR-036: Continuous polling via ProjectionRunner
-- ADR-037: ProjectionConfig via free function
+- ADR-0036: Continuous polling via ProjectionRunner (superseded by ADR-0037)
+- ADR-0037: ProjectionConfig via free function
 - ADR-017: Reserved characters for StreamId and StreamPrefix
 - ADR-0047: Glob pattern matching for subscriptions

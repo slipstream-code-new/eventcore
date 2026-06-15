@@ -17,12 +17,13 @@ The API documentation includes:
 
 ### Core Library
 
-- **[`eventcore`](../../api/eventcore/index.html)** - Core library with command execution, event stores, and projections
-- **[`eventcore::prelude`](../../api/eventcore/prelude/index.html)** - Common imports for EventCore applications
+- **[`eventcore`](../../api/eventcore/index.html)** - Core library with command execution, event stores, and projections. Common types are re-exported at the crate root (e.g. `eventcore::{CommandLogic, StreamId, NewEvents, execute}`).
 
 ### Event Store Adapters
 
 - **[`eventcore_postgres`](../../api/eventcore_postgres/index.html)** - PostgreSQL event store adapter
+- **[`eventcore_sqlite`](../../api/eventcore_sqlite/index.html)** - SQLite event store adapter (optional SQLCipher encryption)
+- **[`eventcore_fs`](../../api/eventcore_fs/index.html)** - Git-mergeable file-based event store
 - **[`eventcore_memory`](../../api/eventcore_memory/index.html)** - In-memory event store for testing
 
 ### Derive Macros
@@ -36,7 +37,7 @@ For quick access to commonly used items:
 - [`CommandLogic`](../../api/eventcore/trait.CommandLogic.html) - Core command logic trait
 - [`execute()`](../../api/eventcore/fn.execute.html) - Free function to execute commands
 - [`run_projection()`](../../api/eventcore/fn.run_projection.html) - Free function to run projections
-- [`EventStore`](../../api/eventcore/trait.EventStore.html) - Event persistence trait
+- [`EventStore`](../../api/eventcore_types/trait.EventStore.html) - Event persistence trait
 - [`Event`](../../api/eventcore/trait.Event.html) - Event trait (stream_id + event_type_name)
 - [`RetryPolicy`](../../api/eventcore/struct.RetryPolicy.html) - Retry configuration
 - [`NewEvents`](../../api/eventcore/struct.NewEvents.html) - Events produced by commands

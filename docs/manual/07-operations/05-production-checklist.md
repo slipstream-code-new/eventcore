@@ -703,8 +703,10 @@ fi
 echo "✅ Metrics endpoint responding"
 
 # Check database connectivity
+# NOTE: EventCore is a library and ships no CLI. Replace `app-cli` below with
+# your application's own operational tooling that runs a database health check.
 echo "🗄️ Testing database connectivity..."
-kubectl exec -n $NAMESPACE deployment/$APP_NAME -- eventcore-cli health-check database
+kubectl exec -n $NAMESPACE deployment/$APP_NAME -- app-cli health-check database
 if [ $? -ne 0 ]; then
     echo "❌ Database connectivity check failed"
     exit 1
@@ -713,8 +715,10 @@ fi
 echo "✅ Database connectivity verified"
 
 # Run smoke tests
+# NOTE: `app-cli` is a placeholder for your application's own tooling; EventCore
+# itself provides no CLI binary.
 echo "💨 Running smoke tests..."
-kubectl exec -n $NAMESPACE deployment/$APP_NAME -- eventcore-cli test smoke
+kubectl exec -n $NAMESPACE deployment/$APP_NAME -- app-cli test smoke
 if [ $? -ne 0 ]; then
     echo "❌ Smoke tests failed"
     exit 1
@@ -837,4 +841,4 @@ Key principles:
 
 This completes the EventCore Operations guide. You now have comprehensive documentation for deploying, monitoring, and maintaining EventCore applications in production environments.
 
-Next, proceed to [Part 7: Reference](../07-reference/README.md) →
+Next, proceed to [Part 7: Reference](../08-reference/README.md) →

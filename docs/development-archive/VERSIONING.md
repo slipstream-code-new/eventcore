@@ -1,5 +1,7 @@
 # EventCore Versioning Strategy
 
+> **Historical (archived).** Superseded by ADR-025, which mandates full lockstep versioning (identical `major.minor.patch` across all crates) automated via release-plz. The crate list, release steps, and MSRV below describe an earlier workspace and are out of date.
+
 This document defines the semantic versioning strategy for the EventCore workspace and all its constituent crates.
 
 ## Overview

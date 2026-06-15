@@ -11,11 +11,19 @@ event-sourcing library, built on `rusqlite`.
 | `encryption` | no      | Enables SQLCipher with vendored OpenSSL via `rusqlite/bundled-sqlcipher-vendored-openssl` for at-rest encryption. |
 
 The `encryption` feature pulls in native crypto code; only enable it if you
-actually need encrypted databases. To link against a system-provided SQLite
+actually need encrypted databases.
+
+> **At-rest encryption requires the `encryption` feature.** Supplying an
+> `encryption_key` (via `SqliteConfig` or a `PRAGMA key` on your own
+> connection) only encrypts data when the crate is built with the
+> `encryption` feature. Under the default `bundled` feature (vanilla SQLite),
+> the key is **silently ignored** and the database is stored in **plaintext**.
+
+To link against a system-provided SQLite
 or to bring your own `rusqlite` features, disable default features:
 
 ```toml
-eventcore-sqlite = { version = "0.7", default-features = false }
+eventcore-sqlite = { version = "1.0", default-features = false }
 ```
 
 When both `bundled` and `encryption` are active, `libsqlite3-sys` links
@@ -24,7 +32,7 @@ but if you want encryption without also pulling in the vanilla vendored
 SQLite source, disable defaults:
 
 ```toml
-eventcore-sqlite = { version = "0.7", default-features = false, features = ["encryption"] }
+eventcore-sqlite = { version = "1.0", default-features = false, features = ["encryption"] }
 ```
 
 ## Version compatibility with `rusqlite`
@@ -53,7 +61,7 @@ the same `rusqlite` `eventcore-sqlite` was built against.
 
 For consumers that need fine-grained control over connection setup —
 custom pragmas, attached databases, encryption keys configured at open
-time, or pooling — use [`SqliteEventStore::from_connection`] (and the
+time, or pooling — use `SqliteEventStore::from_connection` (and the
 matching constructor on `SqliteCheckpointStore`):
 
 ```rust
@@ -67,4 +75,4 @@ store.migrate().await?;
 
 The connection is taken as-is. The consumer is responsible for any pragmas
 (journal mode, encryption key, etc.). If you want EventCore's default setup,
-prefer [`SqliteEventStore::new`] with a `SqliteConfig` instead.
+prefer `SqliteEventStore::new` with a `SqliteConfig` instead.

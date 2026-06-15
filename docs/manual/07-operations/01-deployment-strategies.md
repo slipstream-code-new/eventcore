@@ -621,7 +621,29 @@ spec:
 
 ## Database Migrations
 
-### Schema Migration Strategy
+EventCore's Postgres backend **ships and applies its own schema**. Call
+`PostgresEventStore::migrate()` at startup to create the `eventcore_events`
+table, its immutability triggers, and the subscription-version table used by
+the checkpoint store. EventCore exposes no "migration status" API: `migrate()`
+applies the bundled `sqlx::migrate!` set and **panics on failure**, so treat it
+as a startup gate that must complete before the process begins serving.
+
+```rust
+use eventcore_postgres::PostgresEventStore;
+
+// Connectivity, then EventCore's own schema. Both panic on failure; running
+// them before the HTTP server starts means the process exits cleanly rather
+// than serving in a broken state.
+let store = PostgresEventStore::new(database_url).await?;
+store.migrate().await; // creates/updates eventcore_* tables
+```
+
+### Application Schema Migration Strategy
+
+The migrations below are for **application-owned** tables — read models,
+projections, and other query-side state your app maintains. They are managed
+with `sqlx` directly and are separate from EventCore's event-store schema,
+which `migrate()` owns. Do not hand-roll EventCore's `eventcore_events` table.
 
 ```rust
 use sqlx::{PgPool, migrate::MigrateDatabase, Postgres};
@@ -680,49 +702,41 @@ pub struct MigrationStatus {
 
 ### Migration Files Structure
 
+These migrations cover your application's read models only. EventCore creates
+and owns its own tables (`eventcore_events`, `eventcore_subscription_versions`,
+and the immutability triggers) through `PostgresEventStore::migrate()` — do not
+recreate them here.
+
 ```
 migrations/
-├── 001_initial_schema.sql
+├── 001_account_summary_read_model.sql
 ├── 002_add_user_preferences.sql
-├── 003_optimize_event_indexes.sql
-└── 004_add_projection_checkpoints.sql
+└── 003_optimize_account_summary_indexes.sql
 ```
 
-Example migration:
+Example migration (an application read model populated by a projection):
 
 ```sql
--- migrations/001_initial_schema.sql
--- Create events table with optimized indexes
-CREATE TABLE events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    stream_id VARCHAR(255) NOT NULL,
-    version BIGINT NOT NULL,
-    event_type VARCHAR(255) NOT NULL,
-    payload JSONB NOT NULL,
-    metadata JSONB NOT NULL DEFAULT '{}',
-    occurred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT events_stream_version_unique UNIQUE (stream_id, version)
-);
-
--- Optimized indexes for common query patterns
-CREATE INDEX idx_events_stream_id ON events (stream_id);
-CREATE INDEX idx_events_stream_id_version ON events (stream_id, version);
-CREATE INDEX idx_events_occurred_at ON events (occurred_at);
-CREATE INDEX idx_events_event_type ON events (event_type);
-CREATE INDEX idx_events_payload_gin ON events USING GIN (payload);
-
--- Create projection checkpoints table
-CREATE TABLE projection_checkpoints (
-    projection_name VARCHAR(255) PRIMARY KEY,
-    last_event_id UUID,
-    last_event_version BIGINT,
-    stream_positions JSONB NOT NULL DEFAULT '{}',
+-- migrations/001_account_summary_read_model.sql
+-- A query-side read model maintained by a projection. EventCore's own event
+-- store schema (eventcore_events) is created separately by migrate().
+CREATE TABLE account_summary (
+    account_id UUID PRIMARY KEY,
+    balance_cents BIGINT NOT NULL DEFAULT 0,
+    last_activity_at TIMESTAMP WITH TIME ZONE,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_projection_checkpoints_updated_at ON projection_checkpoints (updated_at);
+-- Indexes for the application's query patterns over this read model.
+CREATE INDEX idx_account_summary_last_activity ON account_summary (last_activity_at);
+CREATE INDEX idx_account_summary_updated_at ON account_summary (updated_at);
 ```
+
+> EventCore's projection checkpoints are stored by its own
+> `CheckpointStore` implementation (in `eventcore_subscription_versions` for the
+> Postgres backend), not by an application-managed checkpoints table. You do not
+> create or write that table yourself — `migrate()` provisions it and the
+> projection runner maintains it.
 
 ### Zero-Downtime Migration Pattern
 
@@ -882,17 +896,41 @@ features:
 
 ### Application Health Endpoints
 
+EventCore does not ship a health-check API. The example below is an
+**application-owned** `HealthService` (an axum handler plus app structs) that
+wires its checks to the **real** mechanisms EventCore exposes:
+
+- **Liveness/connectivity** for the Postgres backend is verified with
+  `PostgresEventStore::ping()`. `ping()` issues a trivial `SELECT 1` and
+  returns `()` — it does **not** return a `Result`. It **panics** if the
+  database is unreachable, so a readiness handler must catch that (here via
+  `tokio::task::spawn` + `JoinHandle::await`, which converts a panic into an
+  `Err`) rather than calling `.is_ok()` on its return value.
+- **Migrations** are applied with `PostgresEventStore::migrate()`, which runs
+  the bundled `sqlx::migrate!` set and also panics on failure. There is no
+  "migration status" query in EventCore; treat migrations as a startup step
+  that must complete before the process begins serving, and expose readiness
+  as "migrations were applied successfully at startup".
+
 ```rust
-use axum::{Json, response::Json as JsonResponse, extract::State};
+use axum::{extract::State, response::Json as JsonResponse};
+use eventcore_postgres::PostgresEventStore;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+// Application-owned health service. `EventStore` has generic methods
+// (`read_stream<E>`), so it cannot be used as a `dyn EventStore` trait object;
+// hold a concrete backend (or your own enum over backends) instead.
 #[derive(Clone)]
 pub struct HealthService {
-    event_store: Arc<dyn EventStore>,
+    event_store: Arc<PostgresEventStore>,
+    // Set to true once `event_store.migrate()` completed at startup.
+    migrations_applied: bool,
+    // Application-defined dependency checks (cache, message bus, etc.).
     dependencies: Vec<Arc<dyn HealthCheck>>,
 }
 
+// Application-owned trait — not part of EventCore.
 pub trait HealthCheck: Send + Sync {
     async fn name(&self) -> &'static str;
     async fn check(&self) -> HealthStatus;
@@ -910,7 +948,7 @@ impl HealthService {
         let mut overall_healthy = true;
         let mut checks = Vec::new();
 
-        // Check event store
+        // Check event store connectivity.
         let event_store_status = self.check_event_store().await;
         let event_store_healthy = matches!(event_store_status, HealthStatus::Healthy);
         overall_healthy &= event_store_healthy;
@@ -924,7 +962,7 @@ impl HealthService {
             }
         }));
 
-        // Check dependencies
+        // Check application-defined dependencies.
         for dependency in &self.dependencies {
             let name = dependency.name().await;
             let status = dependency.check().await;
@@ -952,9 +990,11 @@ impl HealthService {
     }
 
     pub async fn readiness_check(&self) -> JsonResponse<Value> {
-        // Readiness is stricter - all components must be ready
+        // Readiness is stricter - all components must be ready.
         let event_store_ready = self.check_event_store_ready().await;
-        let migrations_ready = self.check_migrations_ready().await;
+        // Migrations are a startup step; readiness reflects whether they
+        // completed before the process began serving.
+        let migrations_ready = self.migrations_applied;
 
         let ready = event_store_ready && migrations_ready;
 
@@ -971,23 +1011,22 @@ impl HealthService {
     }
 
     async fn check_event_store(&self) -> HealthStatus {
-        match self.event_store.health_check().await {
-            Ok(_) => HealthStatus::Healthy,
-            Err(e) => HealthStatus::Unhealthy(format!("Event store error: {}", e)),
+        if self.ping_ok().await {
+            HealthStatus::Healthy
+        } else {
+            HealthStatus::Unhealthy("event store unreachable".to_string())
         }
     }
 
     async fn check_event_store_ready(&self) -> bool {
-        // More stringent check for readiness
-        self.event_store.ping().await.is_ok()
+        self.ping_ok().await
     }
 
-    async fn check_migrations_ready(&self) -> bool {
-        // Check if all migrations are applied
-        match self.event_store.migration_status().await {
-            Ok(status) => status.pending == 0,
-            Err(_) => false,
-        }
+    // `ping()` returns `()` and panics on failure, so run it on a task and
+    // treat a join error (the panic) as "not reachable".
+    async fn ping_ok(&self) -> bool {
+        let store = self.event_store.clone();
+        tokio::spawn(async move { store.ping().await }).await.is_ok()
     }
 }
 
