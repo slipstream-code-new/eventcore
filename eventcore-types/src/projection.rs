@@ -243,7 +243,7 @@ pub trait Projector: Send + 'static {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::BatchSize;
 ///
 /// let small = BatchSize::new(100);
@@ -261,7 +261,7 @@ pub struct BatchSize(usize);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::MaxRetryAttempts;
 ///
 /// let no_retries = MaxRetryAttempts::new(0);
@@ -284,7 +284,7 @@ pub struct MaxRetryAttempts(u32);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::BackoffMultiplier;
 ///
 /// let constant = BackoffMultiplier::try_new(1.0).expect("1.0 is valid");  // No backoff
@@ -308,7 +308,7 @@ pub struct BackoffMultiplier(f64);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::MaxConsecutiveFailures;
 /// use std::num::NonZeroU32;
 ///
@@ -330,7 +330,7 @@ pub struct MaxConsecutiveFailures(std::num::NonZeroU32);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::MaxRetries;
 ///
 /// let no_retry = MaxRetries::new(0);
@@ -348,7 +348,7 @@ pub struct MaxRetries(u32);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::DelayMilliseconds;
 ///
 /// let short = DelayMilliseconds::new(100);
@@ -366,7 +366,7 @@ pub struct DelayMilliseconds(u64);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::AttemptNumber;
 /// use std::num::NonZeroU32;
 ///
@@ -388,7 +388,7 @@ pub struct AttemptNumber(std::num::NonZeroU32);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use eventcore_types::RetryCount;
 ///
 /// let initial_failure = RetryCount::new(0);
@@ -508,7 +508,8 @@ impl EventPage {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
+/// # use eventcore_types::{EventFilter, StreamPrefix, StreamPattern};
 /// // Match all events
 /// let filter = EventFilter::all();
 ///
@@ -544,7 +545,7 @@ impl EventFilter {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// use eventcore_types::{EventFilter, StreamPrefix};
     ///
     /// let prefix = StreamPrefix::try_new("account-").unwrap();
@@ -566,7 +567,7 @@ impl EventFilter {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// use eventcore_types::{EventFilter, StreamPattern};
     ///
     /// let pattern = StreamPattern::try_new("account-*").unwrap();

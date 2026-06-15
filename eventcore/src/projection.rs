@@ -426,7 +426,7 @@ pub enum ProjectionError {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use std::time::Duration;
 /// use eventcore::ProjectionConfig;
 ///
