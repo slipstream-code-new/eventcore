@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-examples-v1.0.0...eventcore-examples-v2.0.0) - 2026-06-15
+
+### Testing
+
+- harden doctests and guard docs against fabricated APIs ([#426](https://git.johnwilger.com/Slipstream/eventcore/pulls/426))
+
 ## [1.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-examples-v0.9.0...eventcore-examples-v1.0.0) - 2026-06-13
 
 ### Features

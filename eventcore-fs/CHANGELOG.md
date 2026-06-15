@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-fs-v1.0.0...eventcore-fs-v2.0.0) - 2026-06-15
+
+### Documentation
+
+- overhaul API documentation across all crates ([#420](https://git.johnwilger.com/Slipstream/eventcore/pulls/420))
+- align all documentation with the 1.0 API ([#424](https://git.johnwilger.com/Slipstream/eventcore/pulls/424))
+
 ## [1.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-fs-v0.9.0...eventcore-fs-v1.0.0) - 2026-06-13
 
 ### Features
