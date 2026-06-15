@@ -1,7 +1,5 @@
 //! Testing utilities for EventCore backends and commands.
 //!
-//! Testing utilities for EventCore backends and commands.
-//!
 //! This crate provides helpers for verifying that `EventStore` implementations
 //! satisfy their behavioral contracts, injecting failures for chaos and retry
 //! testing, and writing readable Given-When-Then command tests.

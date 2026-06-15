@@ -277,16 +277,18 @@ EventCore provides infrastructure for running projections:
 Use the `run_projection()` free function to process all events through your projector:
 
 ```rust
-use eventcore::run_projection;
+use eventcore::{run_projection, ProjectionConfig};
 use eventcore_memory::InMemoryEventStore;
 
 async fn setup_projections() -> Result<(), Box<dyn std::error::Error>> {
     // Event store (already populated with events from command execution)
     let store = InMemoryEventStore::new();
 
-    // Create and run a projection
+    // Create and run a projection. `run_projection` takes the projector, a
+    // reference to the backend, and a `ProjectionConfig`. The default config
+    // runs in batch mode (process all available events, then return).
     let projection = UserTaskListProjection::default();
-    run_projection(projection, &store).await?;
+    run_projection(projection, &store, ProjectionConfig::default()).await?;
 
     Ok(())
 }
@@ -324,10 +326,25 @@ fn query_tasks(projection: &UserTaskListProjection) {
 
 ## Real-time Updates
 
-For continuous projection updates, use `run_projection()` which polls for
-new events. EventCore's projection system handles checkpointing and
-resumption automatically. See the `projection-system` blueprint and
-ADR-0036 for details on the continuous polling architecture.
+For continuous projection updates, configure `ProjectionConfig` in continuous
+mode so `run_projection()` keeps polling for new events instead of returning
+once it reaches the end of the stream:
+
+```rust
+use eventcore::{run_projection, ProjectionConfig};
+use std::time::Duration;
+
+let config = ProjectionConfig::default()
+    .continuous()
+    .poll_interval(Duration::from_millis(200));
+
+run_projection(projection, &store, config).await?;
+```
+
+The default `ProjectionConfig` runs in batch mode (process the currently
+available events, then return). EventCore's projection system handles
+checkpointing and resumption automatically. See the `projection-system`
+blueprint and ADR-0036 for details on the continuous polling architecture.
 
 ## Filtering Which Events a Reader Sees
 
@@ -365,7 +382,7 @@ projections from scratch. Simply create a fresh projector instance and run
 it against the store -- it will replay all events from the beginning:
 
 ```rust
-use eventcore::run_projection;
+use eventcore::{run_projection, ProjectionConfig};
 
 async fn rebuild_projection(
     store: &InMemoryEventStore,
@@ -374,7 +391,7 @@ async fn rebuild_projection(
     let projection = UserTaskListProjection::default();
 
     // Run it -- processes all events from the store
-    run_projection(projection, store).await?;
+    run_projection(projection, store, ProjectionConfig::default()).await?;
 
     println!("Projection rebuilt successfully");
     Ok(())
@@ -389,7 +406,7 @@ Testing projections is straightforward:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::{execute, RetryPolicy, run_projection};
+    use eventcore::{execute, ProjectionConfig, RetryPolicy, run_projection};
     use eventcore_memory::InMemoryEventStore;
     use eventcore_testing::EventCollector;
     use std::sync::{Arc, Mutex};
@@ -412,7 +429,7 @@ mod tests {
         // Then: Run an EventCollector to gather events
         let storage: Arc<Mutex<Vec<SystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let collector = EventCollector::new(storage.clone());
-        run_projection(collector, &store).await.unwrap();
+        run_projection(collector, &store, ProjectionConfig::default()).await.unwrap();
 
         let events = storage.lock().unwrap();
         assert_eq!(events.len(), 1);

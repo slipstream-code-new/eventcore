@@ -13,7 +13,7 @@
 //! `#[stream]`:
 //!
 //! ```rust,ignore
-//! use eventcore::StreamId;
+//! use eventcore::{Command, StreamId};
 //!
 //! #[derive(Command)]
 //! pub struct TransferFunds {

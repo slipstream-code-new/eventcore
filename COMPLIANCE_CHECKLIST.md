@@ -40,14 +40,14 @@ This checklist helps ensure EventCore-based applications meet common security an
 
 - [ ] Remove default accounts and passwords
 - [ ] Disable unnecessary features and services
-- [ ] Keep all dependencies updated (use Dependabot)
+- [ ] Keep all dependencies updated (review `cargo audit` advisories; Dependabot is a GitHub feature and does not apply to this Forgejo-hosted repo)
 - [ ] Configure appropriate security headers
 - [ ] Use environment-specific configurations securely
 
 ### A06:2021 – Vulnerable and Outdated Components
 
 - [x] Automated dependency scanning with `cargo audit`
-- [x] Dependabot configured for automatic updates
+- [x] `cargo audit` runs in CI (Forgejo `security-audit` job) and as a pre-commit hook
 - [ ] Regular manual review of dependencies
 - [ ] Remove unused dependencies
 - [ ] Subscribe to security advisories for critical dependencies

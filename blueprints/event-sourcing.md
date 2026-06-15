@@ -26,7 +26,7 @@ EventCore implements aggregateless event sourcing where commands can atomically 
 ### Read Path (Projections)
 
 1. **Global Reading** — `EventReader::read_events()` reads events across all streams
-2. **Filtering** — `EventFilter` supports all-events or stream-prefix matching
+2. **Filtering** — `EventFilter` supports all-events, stream-prefix, or glob-pattern matching, with optional event-type narrowing (ADR-0047)
 3. **Pagination** — `EventPage` provides cursor-based pagination to prevent memory exhaustion
 4. **Checkpointing** — `CheckpointStore` persists projection progress for resumable processing
 
@@ -105,5 +105,5 @@ not used for deserialization routing.
 - ADR-007: Optimistic concurrency control
 - ADR-012: Event trait for domain-first design
 - ADR-017: StreamId reserved characters
-- ADR-035: Event schema evolution via enum variants
+- ADR-0035: Event schema evolution via enum variants
 - ADR-0049: Streaming reads for `read_stream` (incremental fold, `EventStream<E>`, `collect_events`)

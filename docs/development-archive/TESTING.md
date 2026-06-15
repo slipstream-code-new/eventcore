@@ -1,5 +1,7 @@
 # EventCore Testing Strategy
 
+> **Historical document (archived).** This describes an earlier testing setup and is no longer accurate. The `cargo test-unit` / `cargo test-perf` / `cargo test-all` aliases no longer exist, the referenced `eventcore/tests/performance_validation.rs` and `eventcore/tests/stress_tests.rs` files are gone, and the `PERFORMANCE_ISSUES.md` cross-reference below is a dead link. For current testing commands see `CLAUDE.md` and `AGENTS.md`.
+
 ## Test Categories
 
 ### Unit Tests

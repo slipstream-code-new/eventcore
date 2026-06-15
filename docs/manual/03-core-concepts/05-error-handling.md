@@ -51,27 +51,37 @@ Storage-specific errors:
 ```rust
 #[derive(Debug, thiserror::Error)]
 pub enum EventStoreError {
-    #[error("Version conflict in stream {stream_id}: expected {expected:?}, actual {actual}")]
-    VersionConflict {
+    /// A stream was assigned multiple different expected versions in one batch.
+    #[error("conflicting expected versions for stream {stream_id}: first={first_version}, second={second_version}")]
+    ConflictingExpectedVersions {
         stream_id: StreamId,
-        expected: ExpectedVersion,
-        actual: EventVersion,
+        first_version: StreamVersion,
+        second_version: StreamVersion,
     },
 
-    #[error("Stream {0} not found")]
-    StreamNotFound(StreamId),
+    /// An append targeted a stream that was not declared with an expected version.
+    #[error("stream {stream_id} must be registered before appending events")]
+    UndeclaredStream { stream_id: StreamId },
 
-    #[error("Database error: {0}")]
-    Database(String),
+    /// Event serialization failed before persistence.
+    #[error("failed to serialize event for stream {stream_id}: {detail}")]
+    SerializationFailed { stream_id: StreamId, detail: String },
 
-    #[error("Connection error: {0}")]
-    Connection(String),
+    /// Stored event payloads could not be deserialized into the requested type.
+    #[error("failed to deserialize event for stream {stream_id}: {detail}")]
+    DeserializationFailed { stream_id: StreamId, detail: String },
 
-    #[error("Timeout after {0:?}")]
-    Timeout(Duration),
+    /// Infrastructure failure surfaced by the backing store.
+    #[error("{operation} operation failed")]
+    StoreFailure { operation: Operation },
 
-    #[error("Transaction rolled back: {0}")]
-    TransactionRollback(String),
+    /// Optimistic concurrency conflict: the expected version no longer matches.
+    #[error("version conflict on stream {stream_id}: expected version {expected}, found {actual}")]
+    VersionConflict {
+        stream_id: StreamId,
+        expected: StreamVersion,
+        actual: StreamVersion,
+    },
 }
 ```
 
@@ -187,7 +197,7 @@ EventCore automatically retries on version conflicts:
 ```rust
 // EventCore handles retries via RetryPolicy:
 let policy = RetryPolicy::new()
-    .max_retries(MaxRetries::try_new(5).unwrap())
+    .max_retries(5)
     .backoff_strategy(BackoffStrategy::Exponential {
         base_ms: DelayMilliseconds::new(100),
     });
@@ -252,14 +262,15 @@ impl CircuitBreaker {
     }
 }
 
-// Usage in event store
-impl PostgresEventStore {
-    pub async fn read_stream_with_circuit_breaker(
+// Illustrative: wrap a store in your own circuit-breaker adapter.
+// `read_stream` is a trait method on EventStore returning an EventStream<E>.
+impl<S: EventStore> CircuitBreakerStore<S> {
+    pub async fn read_stream_with_circuit_breaker<E: Event>(
         &self,
-        stream_id: &StreamId,
-    ) -> Result<StreamEvents, EventStoreError> {
+        stream_id: StreamId,
+    ) -> Result<EventStream<E>, EventStoreError> {
         self.circuit_breaker.call(|| {
-            self.read_stream_internal(stream_id).await
+            self.inner.read_stream::<E>(stream_id)
         })
     }
 }
@@ -327,10 +338,10 @@ pub async fn execute_with_dlq<C, S>(
     command: C,
     policy: RetryPolicy,
     dlq: &mut DeadLetterQueue<C>,
-) -> Result<ExecutionResponse<C::Event>, CommandError>
+) -> Result<ExecutionResponse, CommandError>
 where
     C: CommandLogic + CommandStreams + Clone,
-    S: EventStore<Event = C::Event>,
+    S: EventStore,
 {
     match execute(store, command.clone(), policy).await {
         Ok(result) => Ok(result),
@@ -443,8 +454,8 @@ mod tests {
     #[tokio::test]
     async fn test_insufficient_balance_error() {
         let command = TransferMoney {
-            from_account: StreamId::from_static("account-1"),
-            to_account: StreamId::from_static("account-2"),
+            from_account: StreamId::try_new("account-1").unwrap(),
+            to_account: StreamId::try_new("account-2").unwrap(),
             amount: Money::from_cents(1000),
         };
 
@@ -464,8 +475,8 @@ mod tests {
     #[tokio::test]
     async fn test_daily_limit_exceeded() {
         let command = TransferMoney {
-            from_account: StreamId::from_static("account-1"),
-            to_account: StreamId::from_static("account-2"),
+            from_account: StreamId::try_new("account-1").unwrap(),
+            to_account: StreamId::try_new("account-2").unwrap(),
             amount: Money::from_cents(10_000),
         };
 
@@ -476,7 +487,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(CommandError::BusinessRuleViolation(msg)) if msg.contains("Daily transfer limit")
+            Err(CommandError::BusinessRuleViolation(err)) if err.to_string().contains("Daily transfer limit")
         ));
     }
 }
@@ -495,12 +506,12 @@ async fn test_concurrent_modification_handling() {
 
     // Create two conflicting commands
     let withdraw1 = WithdrawMoney {
-        account: StreamId::from_static("account-1"),
+        account: StreamId::try_new("account-1").unwrap(),
         amount: Money::from_cents(600),
     };
 
     let withdraw2 = WithdrawMoney {
-        account: StreamId::from_static("account-1"),
+        account: StreamId::try_new("account-1").unwrap(),
         amount: Money::from_cents(700),
     };
 
@@ -528,19 +539,19 @@ async fn test_concurrent_modification_handling() {
 ### Chaos Testing
 
 ```rust
-use eventcore_testing::chaos::ChaosConfig;
+use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
 
 #[tokio::test]
 async fn test_resilience_under_chaos() {
     let base_store = InMemoryEventStore::new();
-    let chaos_store = base_store.with_chaos(ChaosConfig {
-        failure_probability: 0.1,  // 10% chance of failure
-        latency_ms: Some(50..200), // Random latency
-        version_conflict_probability: 0.2, // 20% chance of conflicts
-    });
+    let chaos_store = base_store.with_chaos(
+        ChaosConfig::default()
+            .with_failure_probability(0.1) // 10% chance of failure
+            .with_version_conflict_probability(0.2), // 20% chance of conflicts
+    );
 
     let policy = RetryPolicy::new()
-        .max_retries(MaxRetries::try_new(10).unwrap());
+        .max_retries(10);
 
     // Run many operations
     let mut handles = vec![];
@@ -593,10 +604,10 @@ async fn execute_with_metrics<C, S>(
     store: &S,
     command: C,
     policy: RetryPolicy,
-) -> Result<ExecutionResponse<C::Event>, CommandError>
+) -> Result<ExecutionResponse, CommandError>
 where
     C: CommandLogic + CommandStreams,
-    S: EventStore<Event = C::Event>,
+    S: EventStore,
 {
     COMMAND_COUNTER.inc();
     let timer = COMMAND_DURATION.start_timer();

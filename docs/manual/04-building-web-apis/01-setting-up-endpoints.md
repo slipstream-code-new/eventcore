@@ -43,28 +43,27 @@ use axum::{
     Router,
 };
 use eventcore::{execute, RetryPolicy};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use eventcore::postgres::PostgresEventStore;
 
-// Application state shared across handlers
+// Application state shared across handlers.
+//
+// `PostgresEventStore` is `Clone` (it holds a connection pool internally), so
+// it can be stored directly in axum state and cloned per request.
 #[derive(Clone)]
 struct AppState {
     event_store: PostgresEventStore,
-    projections: Arc<RwLock<ProjectionManager>>,
 }
 
 #[tokio::main]
 async fn main() {
-    // Initialize EventCore
+    // Initialize the EventCore PostgreSQL backend and run migrations.
     let event_store = PostgresEventStore::new(
         "postgresql://localhost/eventcore"
     ).await.unwrap();
-
-    let projections = Arc::new(RwLock::new(ProjectionManager::new()));
+    event_store.migrate().await;
 
     let state = AppState {
         event_store,
-        projections,
     };
 
     // Build routes
@@ -85,6 +84,14 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 ```
+
+> **Read models / projections.** This example wires only the write path
+> (`execute`). Read models are a separate code path in EventCore: a background
+> task drives `eventcore::run_projection(projector, &backend, config)` to keep a
+> query store up to date, and your `get_*` handlers read from that query store.
+> Projections are not held inside the HTTP `AppState`; see
+> [Projections](../02-getting-started/04-projections.md) and the projection
+> runner (`ProjectionConfig`, `Projector`) for the real API.
 
 ### Command Handler Example
 
@@ -111,16 +118,20 @@ async fn create_task(
     let description = TaskDescription::try_new(request.description)
         .map_err(|e| ApiError::validation(e))?;
 
-    // Create command
+    // Create command. `StreamId` is a validated newtype, so construct it with
+    // `try_new` (the only constructor) and surface any validation failure.
     let task_id = TaskId::new();
+    let stream_id = StreamId::try_new(format!("task-{}", task_id))
+        .map_err(|e| ApiError::validation(e))?;
     let command = CreateTask {
-        task_id: StreamId::from(format!("task-{}", task_id)),
+        task_id: stream_id,
         title,
         description,
     };
 
-    // Execute command
-    execute(&state.event_store, command, RetryPolicy::new())
+    // Execute command. `execute` takes the store and command by value;
+    // `PostgresEventStore` is `Clone`, so clone the pooled handle per request.
+    execute(state.event_store.clone(), command, RetryPolicy::new())
         .await
         .map_err(|e| ApiError::from_command_error(e))?;
 
@@ -420,9 +431,17 @@ async fn timing_middleware(
 
 ## Configuration
 
-Use environment variables for configuration:
+> **EventCore reads no environment variables and ships no config loader.** All
+> application configuration — ports, hosts, the database URL — is owned by your
+> application. The struct below is illustrative application-level code (using the
+> third-party `config` crate); it is not part of EventCore's API. You feed the
+> resulting values into the EventCore backend constructors yourself.
+
+A typical application defines its own configuration struct and loads it however
+it likes (environment variables, a config file, CLI flags):
 
 ```rust
+// Application-level configuration — NOT an EventCore type.
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -460,11 +479,58 @@ impl Config {
 }
 ```
 
-## Health Checks
+### Configuring the EventCore backend
 
-Expose system health:
+To tune the PostgreSQL backend, build a `PostgresConfig` from your application
+config and pass it to `PostgresEventStore::with_config`. `PostgresConfig`
+exposes three fields — `max_connections` (a `MaxConnections` newtype wrapping a
+`NonZeroU32`), `acquire_timeout`, and `idle_timeout` — and defaults to 10
+connections, a 30-second acquire timeout, and a 10-minute idle timeout:
 
 ```rust
+use std::num::NonZeroU32;
+use std::time::Duration;
+use eventcore::postgres::{MaxConnections, PostgresConfig, PostgresEventStore};
+
+let config = Config::from_env().unwrap();
+
+let max_connections = NonZeroU32::new(config.max_connections)
+    .unwrap_or(NonZeroU32::new(10).expect("10 is non-zero"));
+
+let pg_config = PostgresConfig {
+    max_connections: MaxConnections::new(max_connections),
+    acquire_timeout: Duration::from_secs(30),
+    idle_timeout: Duration::from_secs(600),
+};
+
+let event_store =
+    PostgresEventStore::with_config(config.database_url, pg_config)
+        .await
+        .unwrap();
+event_store.migrate().await;
+```
+
+The SQLite backend is configured analogously with `SqliteConfig` passed to
+`SqliteEventStore::new`. There is no global `EventCoreConfig`, `ConfigBuilder`,
+or environment-variable convention — each backend is constructed explicitly.
+
+## Health Checks
+
+Expose system health from your own probe logic.
+
+> EventCore does **not** provide a generic `health_check()` method on the event
+> store. The PostgreSQL backend offers `PostgresEventStore::ping()`, but it
+> returns `()` and **panics** if the database is unreachable — it is intended as
+> a fail-fast startup check, not a graceful liveness probe. For an HTTP health
+> endpoint that reports degraded/unhealthy instead of crashing, write your own
+> probe that returns a `Result`. The `HealthResponse` / `HealthStatus` /
+> `CheckResult` types below are application-level, not EventCore APIs.
+
+A simple approach is to run a trivial query through your own pool handle (or any
+read your application already owns) and map success/failure to a check result:
+
+```rust
+// Application-level health types — NOT EventCore APIs.
 #[derive(Serialize)]
 struct HealthResponse {
     status: HealthStatus,
@@ -483,17 +549,17 @@ enum HealthStatus {
 async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
     let mut checks = HashMap::new();
 
-    // Check event store
-    match state.event_store.health_check().await {
+    // Check the event store with an application-owned probe that returns a
+    // Result rather than panicking. `probe_event_store` is your own function —
+    // for example, issuing a lightweight read and catching the error.
+    match probe_event_store(&state.event_store).await {
         Ok(_) => checks.insert("event_store".to_string(), CheckResult::healthy()),
         Err(e) => checks.insert("event_store".to_string(), CheckResult::unhealthy(e)),
     };
 
-    // Check projections
-    let projections = state.projections.read().await;
-    for (name, health) in projections.health_status() {
-        checks.insert(format!("projection_{}", name), health);
-    }
+    // Projection health is tracked by your own projection-runner supervision
+    // (the task that drives `eventcore::run_projection`), not by an EventCore
+    // type held in `AppState`. Report whatever liveness your supervisor exposes.
 
     // Overall status
     let status = if checks.values().all(|c| c.is_healthy()) {
@@ -592,11 +658,14 @@ mod tests {
     }
 
     async fn create_test_app() -> Router {
+        // `InMemoryEventStore` (from the `eventcore-memory` crate) is the
+        // zero-dependency backend for tests. To swap it in here, make `AppState`
+        // generic over the store type (`AppState<S: EventStore>`) so the same
+        // handlers work against `PostgresEventStore` in production and
+        // `InMemoryEventStore` in tests. `execute` is generic over any
+        // `EventStore`, so the handler code does not change.
         let event_store = InMemoryEventStore::new();
-        let state = AppState {
-            event_store,
-            projections: Arc::new(RwLock::new(ProjectionManager::new())),
-        };
+        let state = AppState { event_store };
 
         Router::new()
             .route("/api/v1/tasks", post(create_task))

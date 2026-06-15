@@ -220,7 +220,7 @@ async fn create_project(
 
     // Create command with validated data
     let command = CreateProject {
-        project_id: StreamId::from(format!("project-{}", ProjectId::new())),
+        project_id: StreamId::try_new(format!("project-{}", ProjectId::new()))?,
         name: ProjectName::try_new(request.name)?,
         description: request.description
             .map(|d| ProjectDescription::try_new(d))
@@ -559,7 +559,7 @@ async fn import_large_dataset(
 
     // Queue command for async processing
     let command = ImportDataset {
-        dataset_id: StreamId::from(format!("dataset-{}", DatasetId::new())),
+        dataset_id: StreamId::try_new(format!("dataset-{}", DatasetId::new()))?,
         source_url: request.source_url,
         import_options: request.options,
         initiated_by: user.id,

@@ -2,6 +2,8 @@
 
 This chapter provides a complete reference for all EventCore configuration options. Use this as a lookup guide when setting up and tuning your EventCore applications.
 
+EventCore deliberately keeps its configuration surface small. There is no global `EventCoreConfig`, no configuration-file loader, and no environment-variable parsing built into the library. Each backend has a small, explicit config struct, and execution/projection behavior is tuned through the `RetryPolicy` and `ProjectionConfig` builders. Wiring those values together — and reading them from files or the environment — is the responsibility of your application.
+
 ## Core Configuration
 
 ### EventStore Configuration
@@ -10,64 +12,99 @@ Configuration for event store implementations.
 
 #### PostgresConfig
 
-Configuration for PostgreSQL event store.
+Configuration for the PostgreSQL connection pool. It has three fields, all with defaults.
 
 ```rust
+use std::time::Duration;
+use eventcore_postgres::MaxConnections;
+
+/// Configuration for PostgresEventStore connection pool.
 #[derive(Debug, Clone)]
 pub struct PostgresConfig {
-    pub database_url: String,
-    pub pool_config: PoolConfig,
-    pub migration_config: MigrationConfig,
-    pub performance_config: PerformanceConfig,
-    pub security_config: SecurityConfig,
-}
-
-impl PostgresConfig {
-    pub fn new(database_url: String) -> Self
-    pub fn from_env() -> Result<Self, ConfigError>
-    pub fn with_pool_config(mut self, config: PoolConfig) -> Self
-    pub fn with_migration_config(mut self, config: MigrationConfig) -> Self
+    /// Maximum number of connections in the pool (default: 10)
+    pub max_connections: MaxConnections,
+    /// Timeout for acquiring a connection from the pool (default: 30 seconds)
+    pub acquire_timeout: Duration,
+    /// Idle timeout for connections in the pool (default: 10 minutes)
+    pub idle_timeout: Duration,
 }
 ```
 
-**Example:**
+`MaxConnections` is a validated newtype wrapping `NonZeroU32` (the pool must
+have at least one connection). `PostgresConfig` implements `Default`
+(`max_connections = 10`, `acquire_timeout = 30s`, `idle_timeout = 600s`), so
+you only override the fields you care about.
+
+The store is constructed with one of three constructors:
 
 ```rust
-let config = PostgresConfig::new("postgresql://localhost/eventcore".to_string())
-    .with_pool_config(PoolConfig {
-        max_connections: 20,
-        min_connections: 5,
-        connect_timeout: Duration::from_secs(10),
-        idle_timeout: Some(Duration::from_secs(300)),
-        max_lifetime: Some(Duration::from_secs(1800)),
-    })
-    .with_migration_config(MigrationConfig {
-        auto_migrate: true,
-        migration_timeout: Duration::from_secs(60),
-    });
+use std::num::NonZeroU32;
+use std::time::Duration;
+use eventcore_postgres::{MaxConnections, PostgresConfig, PostgresEventStore};
+
+// Default configuration (10 connections, 30s acquire, 10m idle).
+let store = PostgresEventStore::new("postgresql://localhost/eventcore").await?;
+
+// Custom configuration via PostgresConfig.
+let config = PostgresConfig {
+    max_connections: MaxConnections::new(
+        NonZeroU32::new(20).expect("20 is non-zero"),
+    ),
+    acquire_timeout: Duration::from_secs(10),
+    idle_timeout: Duration::from_secs(300),
+};
+let store =
+    PostgresEventStore::with_config("postgresql://localhost/eventcore", config).await?;
+
+// Apply the bundled schema migrations.
+store.migrate().await;
+
+// Optionally verify connectivity (panics if the database is unreachable).
+store.ping().await;
 ```
+
+If you need pool knobs beyond these three fields, build an `sqlx::Pool<Postgres>`
+yourself and hand it to `PostgresEventStore::from_pool(pool)`. That gives you
+full control over the underlying `sqlx` pool configuration while still using
+EventCore's storage logic.
+
+**Tuning Guidelines:**
+
+- **max_connections**: 2-4x CPU cores for CPU-bound workloads, higher for
+  I/O-bound. The pool must hold at least one connection.
+- **acquire_timeout**: how long a caller waits for a free connection before
+  failing. Raise it for bursty workloads, lower it to fail fast under
+  saturation.
+- **idle_timeout**: how long an unused connection is kept open. Shorter values
+  release database resources sooner; longer values reduce reconnect churn.
 
 #### SqliteConfig
 
-Configuration for SQLite event store.
+Configuration for the SQLite event store.
 
 ```rust
-#[derive(Debug, Clone)]
+use std::path::PathBuf;
+
+/// Configuration for SqliteEventStore.
+///
+/// `Debug` is hand-implemented so the encryption key is never printed.
+#[derive(Clone)]
 pub struct SqliteConfig {
-    /// Path to the SQLite database file
+    /// Path to the SQLite database file.
     pub path: PathBuf,
-    /// Optional encryption key (uses SQLCipher AES-256 encryption)
+    /// Optional SQLCipher encryption key.
     pub encryption_key: Option<String>,
 }
 ```
 
-**Example:**
+`SqliteConfig` derives only `Clone`; its `Debug` implementation redacts
+`encryption_key` (printed as `[REDACTED]`) so secrets do not leak into logs.
 
 ```rust
-use eventcore_sqlite::{SqliteEventStore, SqliteConfig};
+use eventcore_sqlite::{SqliteConfig, SqliteEventStore};
 use std::path::PathBuf;
 
-// Unencrypted file-backed store
+// File-backed store.
 let config = SqliteConfig {
     path: PathBuf::from("./events.db"),
     encryption_key: None,
@@ -75,129 +112,67 @@ let config = SqliteConfig {
 let store = SqliteEventStore::new(config)?;
 store.migrate().await?;
 
-// Encrypted store
-let config = SqliteConfig {
-    path: PathBuf::from("./events.db"),
-    encryption_key: Some("my-secret-key".to_string()),
-};
-let store = SqliteEventStore::new(config)?;
-store.migrate().await?;
-
-// In-memory store (for testing)
+// In-memory store (for testing).
 let store = SqliteEventStore::in_memory()?;
 store.migrate().await?;
 ```
 
+`SqliteEventStore::new` and `in_memory` are synchronous and return
+`Result<Self, SqliteEventStoreError>`; `migrate` is async. You can also wrap an
+existing `rusqlite::Connection` with `SqliteEventStore::from_connection(conn)`.
+
 **Notes:**
 
-- SQLite uses a single-writer model with `Arc<Mutex<Connection>>` - appropriate for single-process apps
-- WAL mode is enabled by default for better read concurrency
-- Encryption uses SQLCipher (bundled) with vendored OpenSSL - no runtime dependencies
-- In-process projector coordination via `Arc<RwLock<HashSet>>` (no advisory locks needed)
+- SQLite uses a single-writer model — appropriate for single-process apps.
+- WAL mode is enabled for better read concurrency.
+- In-process projector coordination is used (no advisory locks needed).
+- **Encryption is feature-gated.** SQLCipher at-rest encryption requires the
+  non-default `encryption` Cargo feature
+  (`features = ["encryption"]`). With the default `bundled` feature only, the
+  database is plaintext and any `encryption_key` you set is silently ignored.
+  Enable `encryption` whenever you populate `encryption_key`.
 
-#### PoolConfig
+#### Other backends
 
-Database connection pool configuration.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct PoolConfig {
-    /// Maximum number of connections in the pool
-    pub max_connections: u32,
-
-    /// Minimum number of connections to maintain
-    pub min_connections: u32,
-
-    /// Timeout for establishing new connections
-    pub connect_timeout: Duration,
-
-    /// Maximum time a connection can be idle before being closed
-    pub idle_timeout: Option<Duration>,
-
-    /// Maximum lifetime of a connection
-    pub max_lifetime: Option<Duration>,
-
-    /// Test connections before use
-    pub test_before_acquire: bool,
-}
-
-impl Default for PoolConfig {
-    fn default() -> Self {
-        Self {
-            max_connections: 10,
-            min_connections: 2,
-            connect_timeout: Duration::from_secs(5),
-            idle_timeout: Some(Duration::from_secs(600)),
-            max_lifetime: Some(Duration::from_secs(3600)),
-            test_before_acquire: true,
-        }
-    }
-}
-```
-
-**Tuning Guidelines:**
-
-- **max_connections**: 2-4x CPU cores for CPU-bound workloads, higher for I/O-bound
-- **min_connections**: 10-20% of max_connections
-- **connect_timeout**: 5-10 seconds for local databases, 15-30 seconds for remote
-- **idle_timeout**: 5-10 minutes to balance connection reuse and resource usage
-- **max_lifetime**: 30-60 minutes to prevent connection staleness
-
-#### MigrationConfig
-
-Database migration configuration.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct MigrationConfig {
-    /// Automatically run migrations on startup
-    pub auto_migrate: bool,
-
-    /// Timeout for migration operations
-    pub migration_timeout: Duration,
-
-    /// Lock timeout for migration coordination
-    pub lock_timeout: Duration,
-
-    /// Migration table name
-    pub migration_table: String,
-}
-
-impl Default for MigrationConfig {
-    fn default() -> Self {
-        Self {
-            auto_migrate: false,
-            migration_timeout: Duration::from_secs(300),
-            lock_timeout: Duration::from_secs(60),
-            migration_table: "_sqlx_migrations".to_string(),
-        }
-    }
-}
-```
+- **In-memory:** `eventcore_memory::InMemoryEventStore::new()` — a
+  zero-dependency store for tests and development. It takes no configuration.
+- **File-based:** `eventcore_fs::FileEventStore::open(path)?` or
+  `::open_with_config(FsConfig)?` for a git-mergeable, file-backed store.
 
 ### Command Execution Configuration
 
-#### Command Execution Configuration
-
-EventCore uses the free function `execute(&store, command, RetryPolicy::new())` as its canonical entry point. Configuration is passed via `RetryPolicy` and the event store's own configuration, rather than a separate executor config struct.
+EventCore uses the free function `execute(store, command, RetryPolicy)` as its
+canonical entry point. There is no separate executor-config struct, timeout
+struct, or concurrency struct — execution behavior is tuned entirely through
+`RetryPolicy`, and each command declares its own consistency boundaries via
+`#[derive(Command)]`.
 
 ```rust
 use eventcore::{execute, RetryPolicy};
 
-// Execute with default retry policy
-let result = execute(&store, command, RetryPolicy::new()).await?;
+// Execute with the default retry policy.
+let response = execute(store, command, RetryPolicy::new()).await?;
+
+// `ExecutionResponse` exposes how many attempts the command took.
+println!("committed after {} attempt(s)", response.attempts());
 ```
+
+`execute` takes the `store` and `command` **by value** and returns
+`Result<ExecutionResponse, CommandError>`. `ExecutionResponse` carries a single
+piece of information — `attempts() -> u32` — which is `1` on first-try success
+and higher when optimistic-concurrency retries occurred.
 
 #### RetryPolicy
 
 `RetryPolicy` controls how `execute()` retries optimistic-concurrency conflicts.
 It is a builder-style struct, not an enum: construct it with `RetryPolicy::new()`
-and refine it with `max_retries` and `backoff_strategy`.
+(equivalent to `RetryPolicy::default()`) and refine it with `max_retries`,
+`backoff_strategy`, and `with_metrics_hook`.
 
 ```rust
 use eventcore::{BackoffStrategy, DelayMilliseconds, RetryPolicy};
 
-// Default: retries with exponential backoff and a 10ms base delay.
+// Default: 4 retries (5 total attempts) with exponential backoff, 10ms base.
 let default = RetryPolicy::new();
 
 // Disable retries entirely (the outer caller owns retry behavior).
@@ -207,833 +182,220 @@ let no_retry = RetryPolicy::new().max_retries(0);
 let fixed = RetryPolicy::new()
     .max_retries(5)
     .backoff_strategy(BackoffStrategy::Fixed {
-        delay: DelayMilliseconds::new(100),
+        delay_ms: DelayMilliseconds::new(100),
     });
 
 // Exponential backoff (base delay doubled per attempt) for high-traffic systems.
 let exponential = RetryPolicy::new()
     .max_retries(3)
     .backoff_strategy(BackoffStrategy::Exponential {
-        base_delay: DelayMilliseconds::new(10),
+        base_ms: DelayMilliseconds::new(10),
     });
 ```
 
 `BackoffStrategy` has two variants:
 
-- **`Fixed { delay }`** — the same delay between every retry attempt;
+- **`Fixed { delay_ms }`** — the same delay between every retry attempt;
   predictable timing for rate-limited APIs.
-- **`Exponential { base_delay }`** — `base_delay * 2^attempt`; reduces load
-  during high-traffic periods (the default).
+- **`Exponential { base_ms }`** — `base_ms * 2^attempt`; reduces load
+  during high-traffic periods (the default). EventCore applies jitter during
+  execution to avoid synchronized retries.
 
 EventCore retries optimistic-concurrency conflicts only; business-rule
 violations and other errors surface immediately without retrying. When retries
 are exhausted, `execute()` returns `CommandError::ConcurrencyError(attempts)`.
 
-#### TimeoutConfig
+#### Metrics integration (MetricsHook)
 
-Configuration for command timeouts.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct TimeoutConfig {
-    /// Default timeout for command execution
-    pub default_timeout: Duration,
-
-    /// Timeout for reading streams
-    pub read_timeout: Duration,
-
-    /// Timeout for writing events
-    pub write_timeout: Duration,
-
-    /// Timeout for stream discovery
-    pub discovery_timeout: Duration,
-}
-
-impl Default for TimeoutConfig {
-    fn default() -> Self {
-        Self {
-            default_timeout: Duration::from_secs(30),
-            read_timeout: Duration::from_secs(10),
-            write_timeout: Duration::from_secs(15),
-            discovery_timeout: Duration::from_secs(5),
-        }
-    }
-}
-```
-
-#### ConcurrencyConfig
-
-Configuration for concurrent command execution.
+EventCore does **not** ship a metrics subsystem, a `MetricsConfig`, or a
+`monitoring` module. Instead it exposes a single callback trait, `MetricsHook`,
+which you attach to a `RetryPolicy`. Your application owns the actual metrics
+backend (Prometheus, OpenTelemetry, StatsD, logs, etc.).
 
 ```rust
-#[derive(Debug, Clone)]
-pub struct ConcurrencyConfig {
-    /// Maximum number of concurrent commands
-    pub max_concurrent_commands: usize,
+use eventcore::{MetricsHook, RetryContext, RetryPolicy};
 
-    /// Maximum iterations for stream discovery
-    pub max_discovery_iterations: usize,
+struct MyMetricsHook;
 
-    /// Enable command batching
-    pub enable_batching: bool,
-
-    /// Maximum batch size for event writes
-    pub max_batch_size: usize,
-
-    /// Batch timeout
-    pub batch_timeout: Duration,
-}
-
-impl Default for ConcurrencyConfig {
-    fn default() -> Self {
-        Self {
-            max_concurrent_commands: 100,
-            max_discovery_iterations: 10,
-            enable_batching: true,
-            max_batch_size: 1000,
-            batch_timeout: Duration::from_millis(100),
-        }
+impl MetricsHook for MyMetricsHook {
+    fn on_retry_attempt(&self, ctx: &RetryContext) {
+        // ctx.streams: Vec<StreamId> being retried
+        // ctx.attempt: AttemptNumber (1-based)
+        // ctx.delay_ms: DelayMilliseconds before this retry
+        // Record these in your own metrics backend.
     }
 }
+
+let policy = RetryPolicy::new().with_metrics_hook(MyMetricsHook);
 ```
 
-**Concurrency Tuning:**
-
-- **max_concurrent_commands**: Balance between throughput and resource usage
-- **max_discovery_iterations**: Higher values allow more complex stream patterns but increase latency
-- **max_batch_size**: Larger batches improve throughput but increase memory usage and latency
+For tracing and structured logs, EventCore emits `tracing` spans and events
+(including `delay_ms`, `attempt`, and `stream_id` on retry warnings). Configure
+a `tracing` subscriber in your application to collect them; EventCore does not
+configure logging on your behalf.
 
 ## Projection Configuration
 
 ### ProjectionConfig
 
-Configuration for projection management.
-
-````rust
-#[derive(Debug, Clone)]
-pub struct ProjectionConfig {
-    pub checkpoint_config: CheckpointConfig,
-    pub processing_config: ProcessingConfig,
-    pub recovery_config: RecoveryConfig,
-}
-
-#### CheckpointConfig
-
-Configuration for projection checkpointing.
+`ProjectionConfig` controls how `run_projection` polls and processes events. It
+has private fields and a builder API; construct it with
+`ProjectionConfig::default()` and refine it with builder methods. The default is
+**batch mode** — process all currently available events, then stop.
 
 ```rust
-#[derive(Debug, Clone)]
-pub struct CheckpointConfig {
-    /// How often to save checkpoints
-    pub checkpoint_interval: Duration,
+use std::time::Duration;
+use eventcore::{run_projection, ProjectionConfig};
 
-    /// Number of events to process before checkpointing
-    pub events_per_checkpoint: usize,
+// Default: batch mode.
+let config = ProjectionConfig::default();
 
-    /// Store for checkpoint persistence
-    pub checkpoint_store: CheckpointStoreConfig,
+// Continuous mode with a custom poll interval.
+let config = ProjectionConfig::default()
+    .continuous()
+    .poll_interval(Duration::from_millis(200));
 
-    /// Enable checkpoint compression
-    pub compress_checkpoints: bool,
-}
+// `run_projection` takes the projector by value, the backend by reference,
+// and the config by value (three arguments).
+run_projection(my_projector, &backend, config).await?;
+```
 
-impl Default for CheckpointConfig {
-    fn default() -> Self {
-        Self {
-            checkpoint_interval: Duration::from_secs(30),
-            events_per_checkpoint: 1000,
-            checkpoint_store: CheckpointStoreConfig::Database,
-            compress_checkpoints: true,
-        }
-    }
-}
+Builder methods (each returns `Self` for chaining):
 
-#[derive(Debug, Clone)]
-pub enum CheckpointStoreConfig {
-    /// Store checkpoints in the main database
-    Database,
+- **`.continuous()`** — switch from batch mode to continuous polling. The runner
+  keeps polling for new events until stopped.
+- **`.poll_interval(Duration)`** — interval between polls when events are
+  available.
+- **`.empty_poll_backoff(Duration)`** — additional delay when a poll finds no
+  events.
+- **`.poll_failure_backoff(Duration)`** — additional delay after a poll failure.
+- **`.max_consecutive_poll_failures(MaxConsecutiveFailures)`** — how many
+  consecutive poll failures are tolerated before the runner stops.
+- **`.event_retry_max_attempts(MaxRetryAttempts)`** — retry attempts for a
+  failing event.
+- **`.event_retry_delay(Duration)`** — initial delay between event retries.
+- **`.event_retry_backoff_multiplier(BackoffMultiplier)`** — exponential
+  multiplier applied to the event-retry delay.
+- **`.event_retry_max_delay(Duration)`** — cap on the event-retry delay.
 
-    /// Store checkpoints in Redis
-    Redis { connection_string: String },
+The validated newtypes used by the retry/poll tuning methods
+(`MaxConsecutiveFailures`, `MaxRetryAttempts`, `BackoffMultiplier`) live in
+`eventcore_types`; import them from there when you need to override those
+defaults.
 
-    /// Store checkpoints in memory (testing only)
-    InMemory,
+### Per-event failure handling (FailureStrategy)
 
-    /// Custom checkpoint store
-    Custom { store_type: String, config: HashMap<String, String> },
-}
-````
+How a single failing event is handled is decided by the projector, not by
+`ProjectionConfig`. A `Projector` inspects a `FailureContext` and returns a
+`FailureStrategy`:
 
-#### ProcessingConfig
+- **`FailureStrategy::Fatal`** — stop processing and surface the error
+  (unrecoverable or corrupting failures).
+- **`FailureStrategy::Skip`** — skip the event and continue (poison/malformed
+  events that are safe to ignore).
+- **`FailureStrategy::Retry`** — retry the event according to the
+  `ProjectionConfig` event-retry settings (likely-transient failures).
 
-Configuration for event processing.
+`run_projection` returns `Result<(), ProjectionError>`.
+
+## What EventCore Does Not Configure
+
+The following configuration mechanisms **do not exist** in EventCore. If you
+need any of these capabilities, they belong to your application, not the
+library.
+
+### No environment-variable configuration
+
+EventCore reads no environment variables and recognizes no `EVENTCORE_*`
+prefix. If you want to drive configuration from the environment, read the
+variables in your application and translate them into `PostgresConfig`,
+`SqliteConfig`, `RetryPolicy`, and `ProjectionConfig` values yourself.
 
 ```rust
-#[derive(Debug, Clone)]
-pub struct ProcessingConfig {
-    /// Number of events to process in each batch
-    pub batch_size: usize,
+// Application-level: you own the env-var reading.
+use std::num::NonZeroU32;
+use eventcore_postgres::{MaxConnections, PostgresConfig, PostgresEventStore};
 
-    /// Timeout for processing a single event
-    pub event_timeout: Duration,
+let url = std::env::var("DATABASE_URL")?;
+let max = std::env::var("DB_MAX_CONNECTIONS")
+    .ok()
+    .and_then(|s| s.parse::<u32>().ok())
+    .and_then(NonZeroU32::new)
+    .map(MaxConnections::new)
+    .unwrap_or_else(|| PostgresConfig::default().max_connections);
 
-    /// Timeout for processing a batch
-    pub batch_timeout: Duration,
-
-    /// Number of parallel processors
-    pub parallelism: usize,
-
-    /// Buffer size for event queues
-    pub buffer_size: usize,
-
-    /// Error handling strategy
-    pub error_handling: ErrorHandlingStrategy,
-}
-
-impl Default for ProcessingConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: 100,
-            event_timeout: Duration::from_secs(5),
-            batch_timeout: Duration::from_secs(30),
-            parallelism: 1,
-            buffer_size: 10000,
-            error_handling: ErrorHandlingStrategy::SkipAndLog,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ErrorHandlingStrategy {
-    /// Skip failed events and log errors
-    SkipAndLog,
-
-    /// Stop processing on first error
-    FailFast,
-
-    /// Retry failed events with backoff
-    Retry { max_attempts: u32, backoff: Duration },
-
-    /// Send failed events to dead letter queue
-    DeadLetter { queue_config: DeadLetterConfig },
-}
+let config = PostgresConfig { max_connections: max, ..PostgresConfig::default() };
+let store = PostgresEventStore::with_config(url, config).await?;
 ```
 
-## Monitoring Configuration
-
-### MetricsConfig
-
-Configuration for metrics collection.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct MetricsConfig {
-    /// Enable metrics collection
-    pub enabled: bool,
-
-    /// Metrics export format
-    pub export_format: MetricsFormat,
-
-    /// Export interval
-    pub export_interval: Duration,
-
-    /// Histogram buckets for latency metrics
-    pub latency_buckets: Vec<f64>,
-
-    /// Labels to add to all metrics
-    pub default_labels: HashMap<String, String>,
-
-    /// Metrics to collect
-    pub collectors: Vec<MetricsCollector>,
-}
-
-impl Default for MetricsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            export_format: MetricsFormat::Prometheus,
-            export_interval: Duration::from_secs(15),
-            latency_buckets: vec![
-                0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
-            ],
-            default_labels: HashMap::new(),
-            collectors: vec![
-                MetricsCollector::Commands,
-                MetricsCollector::Events,
-                MetricsCollector::Projections,
-                MetricsCollector::System,
-            ],
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum MetricsFormat {
-    Prometheus,
-    OpenTelemetry,
-    StatsD,
-    Custom { format: String },
-}
-
-#[derive(Debug, Clone)]
-pub enum MetricsCollector {
-    Commands,
-    Events,
-    Projections,
-    System,
-    Custom { name: String },
-}
-```
-
-### TracingConfig
-
-Configuration for distributed tracing.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct TracingConfig {
-    /// Enable tracing
-    pub enabled: bool,
-
-    /// Tracing exporter configuration
-    pub exporter: TracingExporter,
-
-    /// Sampling configuration
-    pub sampling: SamplingConfig,
-
-    /// Resource attributes
-    pub resource_attributes: HashMap<String, String>,
-
-    /// Span attributes to add to all spans
-    pub default_span_attributes: HashMap<String, String>,
-}
-
-impl Default for TracingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            exporter: TracingExporter::Jaeger {
-                endpoint: "http://localhost:14268/api/traces".to_string(),
-            },
-            sampling: SamplingConfig::default(),
-            resource_attributes: HashMap::new(),
-            default_span_attributes: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum TracingExporter {
-    Jaeger { endpoint: String },
-    Zipkin { endpoint: String },
-    OpenTelemetry { endpoint: String },
-    Console,
-    None,
-}
-
-#[derive(Debug, Clone)]
-pub struct SamplingConfig {
-    /// Sampling rate (0.0 to 1.0)
-    pub sample_rate: f64,
-
-    /// Always sample errors
-    pub always_sample_errors: bool,
-
-    /// Sampling strategy
-    pub strategy: SamplingStrategy,
-}
-
-impl Default for SamplingConfig {
-    fn default() -> Self {
-        Self {
-            sample_rate: 0.1,
-            always_sample_errors: true,
-            strategy: SamplingStrategy::Probabilistic,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum SamplingStrategy {
-    /// Always sample
-    Always,
-
-    /// Never sample
-    Never,
-
-    /// Probabilistic sampling
-    Probabilistic,
-
-    /// Rate limiting sampling
-    RateLimit { max_per_second: u32 },
-}
-```
-
-### LoggingConfig
-
-Configuration for structured logging.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct LoggingConfig {
-    /// Log level
-    pub level: LogLevel,
-
-    /// Log format
-    pub format: LogFormat,
-
-    /// Output destination
-    pub output: LogOutput,
-
-    /// Include timestamps
-    pub include_timestamps: bool,
-
-    /// Include source code locations
-    pub include_locations: bool,
-
-    /// Correlation ID header name
-    pub correlation_id_header: String,
-
-    /// Fields to include in all log entries
-    pub default_fields: HashMap<String, String>,
-}
-
-impl Default for LoggingConfig {
-    fn default() -> Self {
-        Self {
-            level: LogLevel::Info,
-            format: LogFormat::Json,
-            output: LogOutput::Stdout,
-            include_timestamps: true,
-            include_locations: false,
-            correlation_id_header: "x-correlation-id".to_string(),
-            default_fields: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-#[derive(Debug, Clone)]
-pub enum LogFormat {
-    Json,
-    Logfmt,
-    Pretty,
-    Compact,
-}
-
-#[derive(Debug, Clone)]
-pub enum LogOutput {
-    Stdout,
-    Stderr,
-    File { path: String, rotation: RotationConfig },
-    Syslog { facility: String },
-    Network { endpoint: String },
-}
-
-#[derive(Debug, Clone)]
-pub struct RotationConfig {
-    pub max_size_mb: u64,
-    pub max_files: u32,
-    pub compress: bool,
-}
-```
-
-## Security Configuration
-
-### SecurityConfig
-
-Configuration for security features.
-
-````rust
-#[derive(Debug, Clone)]
-pub struct SecurityConfig {
-    pub tls_config: Option<TlsConfig>,
-    pub auth_config: AuthConfig,
-    pub encryption_config: EncryptionConfig,
-}
-
-#### TlsConfig
-
-Configuration for TLS encryption.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct TlsConfig {
-    /// Path to certificate file
-    pub cert_file: String,
-
-    /// Path to private key file
-    pub key_file: String,
-
-    /// Path to CA certificate file (for client verification)
-    pub ca_file: Option<String>,
-
-    /// Require client certificates
-    pub require_client_cert: bool,
-
-    /// Minimum TLS version
-    pub min_version: TlsVersion,
-
-    /// Allowed cipher suites
-    pub cipher_suites: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum TlsVersion {
-    V1_2,
-    V1_3,
-}
-````
-
-#### AuthConfig
-
-Configuration for authentication.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct AuthConfig {
-    /// Authentication provider
-    pub provider: AuthProvider,
-
-    /// Token validation settings
-    pub token_validation: TokenValidationConfig,
-
-    /// Session configuration
-    pub session_config: SessionConfig,
-}
-
-#[derive(Debug, Clone)]
-pub enum AuthProvider {
-    /// JWT-based authentication
-    Jwt {
-        secret_key: String,
-        algorithm: JwtAlgorithm,
-        issuer: Option<String>,
-        audience: Option<String>,
-    },
-
-    /// OAuth2 authentication
-    OAuth2 {
-        client_id: String,
-        client_secret: String,
-        auth_url: String,
-        token_url: String,
-        scopes: Vec<String>,
-    },
-
-    /// API key authentication
-    ApiKey {
-        header_name: String,
-        query_param: Option<String>,
-    },
-
-    /// Custom authentication
-    Custom { provider_type: String, config: HashMap<String, String> },
-}
-
-#[derive(Debug, Clone)]
-pub enum JwtAlgorithm {
-    HS256,
-    HS384,
-    HS512,
-    RS256,
-    RS384,
-    RS512,
-    ES256,
-    ES384,
-    ES512,
-}
-```
-
-#### EncryptionConfig
-
-Configuration for data encryption.
-
-```rust
-#[derive(Debug, Clone)]
-pub struct EncryptionConfig {
-    /// Enable encryption at rest
-    pub encrypt_at_rest: bool,
-
-    /// Encryption algorithm
-    pub algorithm: EncryptionAlgorithm,
-
-    /// Key management configuration
-    pub key_management: KeyManagementConfig,
-
-    /// Fields to encrypt
-    pub encrypted_fields: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum EncryptionAlgorithm {
-    AES256GCM,
-    ChaCha20Poly1305,
-    XChaCha20Poly1305,
-}
-
-#[derive(Debug, Clone)]
-pub enum KeyManagementConfig {
-    /// Environment variable
-    Environment { key_var: String },
-
-    /// AWS KMS
-    AwsKms { key_id: String, region: String },
-
-    /// HashiCorp Vault
-    Vault { endpoint: String, token: String, key_path: String },
-
-    /// File-based key storage
-    File { key_file: String },
-}
-```
-
-## Environment Variables
-
-EventCore supports configuration via environment variables with the `EVENTCORE_` prefix:
-
-### Core Settings
-
-```bash
-# Database configuration
-EVENTCORE_DATABASE_URL=postgresql://localhost/eventcore
-EVENTCORE_DATABASE_MAX_CONNECTIONS=20
-EVENTCORE_DATABASE_MIN_CONNECTIONS=5
-EVENTCORE_DATABASE_CONNECT_TIMEOUT=10
-EVENTCORE_DATABASE_IDLE_TIMEOUT=300
-EVENTCORE_DATABASE_MAX_LIFETIME=1800
-
-# Command execution
-EVENTCORE_COMMAND_DEFAULT_TIMEOUT=30
-EVENTCORE_COMMAND_MAX_RETRIES=5
-EVENTCORE_COMMAND_RETRY_DELAY_MS=50
-EVENTCORE_COMMAND_MAX_CONCURRENT=100
-
-# Projections
-EVENTCORE_PROJECTION_BATCH_SIZE=100
-EVENTCORE_PROJECTION_CHECKPOINT_INTERVAL=30
-EVENTCORE_PROJECTION_EVENTS_PER_CHECKPOINT=1000
-
-# Metrics and monitoring
-EVENTCORE_METRICS_ENABLED=true
-EVENTCORE_METRICS_EXPORT_INTERVAL=15
-EVENTCORE_TRACING_ENABLED=true
-EVENTCORE_TRACING_SAMPLE_RATE=0.1
-
-# Security
-EVENTCORE_JWT_SECRET=your-secret-key
-EVENTCORE_TLS_CERT_FILE=/path/to/cert.pem
-EVENTCORE_TLS_KEY_FILE=/path/to/key.pem
-EVENTCORE_ENCRYPT_AT_REST=true
-```
-
-### Logging Configuration
-
-```bash
-EVENTCORE_LOG_LEVEL=info
-EVENTCORE_LOG_FORMAT=json
-EVENTCORE_LOG_OUTPUT=stdout
-EVENTCORE_LOG_INCLUDE_TIMESTAMPS=true
-EVENTCORE_LOG_INCLUDE_LOCATIONS=false
-```
-
-### Development Settings
-
-```bash
-# Development mode settings
-EVENTCORE_DEV_MODE=true
-EVENTCORE_DEV_AUTO_MIGRATE=true
-EVENTCORE_DEV_RESET_DB=false
-EVENTCORE_DEV_SEED_DATA=true
-
-# Testing settings
-EVENTCORE_TEST_DATABASE_URL=postgresql://localhost/eventcore_test
-EVENTCORE_TEST_PARALLEL=true
-EVENTCORE_TEST_RESET_BETWEEN_TESTS=true
-```
-
-## Configuration Files
-
-### TOML Configuration Example
-
-```toml
-# eventcore.toml
-
-[database]
-url = "postgresql://localhost/eventcore"
-max_connections = 20
-min_connections = 5
-connect_timeout = "10s"
-idle_timeout = "5m"
-max_lifetime = "30m"
-
-[commands]
-default_timeout = "30s"
-max_retries = 5
-retry_delay = "50ms"
-max_concurrent = 100
-max_discovery_iterations = 10
-
-[projections]
-batch_size = 100
-checkpoint_interval = "30s"
-events_per_checkpoint = 1000
-parallelism = 1
-
-[metrics]
-enabled = true
-export_format = "prometheus"
-export_interval = "15s"
-latency_buckets = [0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
-
-[tracing]
-enabled = true
-exporter = "jaeger"
-jaeger_endpoint = "http://localhost:14268/api/traces"
-sample_rate = 0.1
-always_sample_errors = true
-
-[logging]
-level = "info"
-format = "json"
-output = "stdout"
-include_timestamps = true
-include_locations = false
-
-[security]
-encrypt_at_rest = true
-jwt_secret = "${JWT_SECRET}"
-
-[security.tls]
-cert_file = "/etc/ssl/certs/eventcore.pem"
-key_file = "/etc/ssl/private/eventcore.key"
-require_client_cert = false
-min_version = "1.3"
-```
-
-### YAML Configuration Example
-
-```yaml
-# eventcore.yaml
-
-database:
-  url: postgresql://localhost/eventcore
-  pool:
-    max_connections: 20
-    min_connections: 5
-    connect_timeout: 10s
-    idle_timeout: 5m
-    max_lifetime: 30m
-  migration:
-    auto_migrate: false
-    migration_timeout: 5m
-
-commands:
-  timeout:
-    default_timeout: 30s
-    read_timeout: 10s
-    write_timeout: 15s
-  retry:
-    max_attempts: 5
-    initial_delay: 50ms
-    max_delay: 1s
-    backoff_multiplier: 2.0
-    policy: transient_errors_only
-    jitter: true
-  concurrency:
-    max_concurrent_commands: 100
-    max_discovery_iterations: 10
-    enable_batching: true
-    max_batch_size: 1000
-
-projections:
-  checkpoint:
-    interval: 30s
-    events_per_checkpoint: 1000
-    store: database
-    compress: true
-  processing:
-    batch_size: 100
-    event_timeout: 5s
-    batch_timeout: 30s
-    parallelism: 1
-    error_handling: skip_and_log
-
-monitoring:
-  metrics:
-    enabled: true
-    export_format: prometheus
-    export_interval: 15s
-    collectors:
-      - commands
-      - events
-      - projections
-      - system
-  tracing:
-    enabled: true
-    exporter:
-      type: jaeger
-      endpoint: http://localhost:14268/api/traces
-    sampling:
-      sample_rate: 0.1
-      always_sample_errors: true
-  logging:
-    level: info
-    format: json
-    output: stdout
-    correlation_id_header: x-correlation-id
-
-security:
-  auth:
-    provider:
-      type: jwt
-      secret_key: ${JWT_SECRET}
-      algorithm: HS256
-  encryption:
-    encrypt_at_rest: true
-    algorithm: AES256GCM
-    key_management:
-      type: environment
-      key_var: ENCRYPTION_KEY
-```
-
-## Configuration Loading
-
-EventCore supports multiple configuration sources with the following precedence order:
-
-1. **Command line arguments** (highest priority)
-2. **Environment variables**
-3. **Configuration files** (TOML, YAML, JSON)
-4. **Default values** (lowest priority)
-
-### Loading Configuration in Code
-
-```rust
-// Application-level configuration loading (not part of eventcore core)
-
-// Load from environment and files
-let config = EventCoreConfig::from_env()
-    .expect("Failed to load configuration");
-
-// Custom configuration loading
-let config = ConfigBuilder::new()
-    .load_from_file("config/eventcore.toml")?
-    .load_from_env()?
-    .override_with_args(std::env::args())?
-    .build()?;
-
-// Validate configuration
-config.validate()?;
-```
-
-This completes the configuration reference. All EventCore configuration options are documented with examples, default values, and tuning guidelines.
+### No configuration files or config loader
+
+There is no `EventCoreConfig`, `ConfigBuilder`, or built-in support for
+`eventcore.toml` / `eventcore.yaml` / JSON config files, and no four-level
+precedence chain. Use whatever configuration crate you prefer (for example
+`config`, `figment`, or `serde`-based loading) in your application and construct
+the small EventCore config structs from the result. EventCore intentionally
+leaves configuration sourcing and precedence to the host application.
+
+### No CLI
+
+There is no `eventcore-cli` crate and no EventCore command-line binary. Database
+migrations are applied programmatically through the backend's `migrate()` method
+(`PostgresEventStore::migrate().await`,
+`SqliteEventStore::migrate().await?`).
+
+### No built-in monitoring, security, or auth subsystems
+
+EventCore has no `monitoring` module and no `MetricsConfig`, `TracingConfig`,
+`LoggingConfig`, `SecurityConfig`, `TlsConfig`, `AuthConfig`, or
+`EncryptionConfig` types. Observability is integrated through the `MetricsHook`
+trait (above) plus the `tracing` ecosystem, and transport security /
+authentication are concerns of your deployment (for example, TLS terminated at
+your database connection string or a proxy, and authorization enforced in your
+command layer). The only built-in at-rest encryption is SQLCipher for SQLite,
+enabled via the `encryption` Cargo feature and `SqliteConfig::encryption_key`
+(see [SqliteConfig](#sqliteconfig)).
+
+### No event-schema registry or upcasting
+
+EventCore has no `SchemaRegistry`, `EventSerializer`, or upcasting subsystem.
+Per [ADR-0035](../../adr/), schema evolution is handled with `serde`:
+
+- **Additive changes** (new optional fields): add the field with
+  `#[serde(default)]` so existing serialized events still deserialize.
+- **Incompatible changes**: introduce a **new event variant**. Handlers and
+  projectors match all variants, so old events keep deserializing into the old
+  variant while new logic emits the new one.
+
+### The write path is `handle()` + `execute()`
+
+There are no `EventToWrite`, `EventMetadata`, `ExpectedVersion`, `EventVersion`,
+`EventId`, `StreamEvents`, `WriteResult`, or `ReadOptions` types, and no
+`write_events` / `read_streams` / `write_versioned_events` methods to configure.
+A command's `handle()` returns `NewEvents`, and `execute()` appends them
+atomically with optimistic concurrency control. Internally the `EventStore`
+trait uses `append_events(StreamWrites)` and `read_stream(StreamId) ->
+EventStream`; versions are `StreamVersion` and positions are `StreamPosition`
+(UUIDv7). Consumers do not construct these directly — `execute()` and
+`run_projection()` own that machinery.
+
+## Errors
+
+Command execution returns `CommandError`, whose variants are:
+
+- **`BusinessRuleViolation(Box<dyn Error + Send + Sync>)`** — a business rule
+  failed (typically produced by the `require!` macro or a typed command error).
+- **`ConcurrencyError(u32)`** — optimistic-concurrency conflict persisted after
+  exhausting the configured retries; the `u32` is the attempt count.
+- **`EventStoreError(EventStoreError)`** — a backend storage failure.
+- **`ValidationError(String)`** — the command reached an invalid execution state.
+
+`EventStoreError` (from the backend) includes variants such as
+`ConflictingExpectedVersions`, `UndeclaredStream`, `SerializationFailed`,
+`DeserializationFailed`, `StoreFailure`, and `VersionConflict`. See the
+[Error Reference](./03-error-reference.md) for the full breakdown.
+
+This completes the configuration reference. Every EventCore configuration knob
+is documented above with its real shape, defaults, and tuning guidance.
 
 Next, explore [Error Reference](./03-error-reference.md) →

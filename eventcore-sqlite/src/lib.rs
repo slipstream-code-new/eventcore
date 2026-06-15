@@ -7,6 +7,11 @@
 //! in [`SqliteConfig`]. When an encryption key is provided, the database file
 //! is encrypted at rest using SQLCipher.
 //!
+//! SQLCipher encryption only takes effect when the `encryption` Cargo feature
+//! is enabled (it is off by default). Without it the crate links vanilla
+//! SQLite, the `encryption_key` PRAGMA is silently ignored, and the database
+//! is written unencrypted.
+//!
 //! `SqliteEventStore` implements `EventStore`, `EventReader`, `CheckpointStore`,
 //! and projector coordination from `eventcore-types`.
 //!
@@ -86,7 +91,11 @@ pub enum SqliteCoordinationError {
 /// accidental exposure in logs.
 #[derive(Clone)]
 pub struct SqliteConfig {
+    /// Filesystem location of the database file.
     pub path: PathBuf,
+    /// Optional SQLCipher key. Only honored when the `encryption` Cargo
+    /// feature is enabled; on the default (vanilla SQLite) build it is
+    /// silently ignored and the database is written unencrypted.
     pub encryption_key: Option<String>,
 }
 
@@ -253,6 +262,9 @@ impl std::fmt::Debug for SqliteEventStore {
 }
 
 impl SqliteEventStore {
+    /// Open (or create) a SQLite store at the configured path, applying
+    /// EventCore's default pragmas (WAL, plus the SQLCipher key when configured
+    /// and the `encryption` feature is enabled).
     pub fn new(config: SqliteConfig) -> Result<Self, SqliteEventStoreError> {
         let conn = open_connection(&config.path, config.encryption_key.as_deref())?;
         Ok(Self {
@@ -261,6 +273,7 @@ impl SqliteEventStore {
         })
     }
 
+    /// Create an ephemeral in-memory store, useful for tests.
     pub fn in_memory() -> Result<Self, SqliteEventStoreError> {
         let conn = open_in_memory_connection()?;
         Ok(Self {
@@ -284,6 +297,8 @@ impl SqliteEventStore {
         }
     }
 
+    /// Create the `eventcore_events` and `eventcore_subscription_versions`
+    /// tables if they do not exist.
     pub async fn migrate(&self) -> Result<(), SqliteEventStoreError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
@@ -735,6 +750,8 @@ impl Drop for SqliteCoordinationGuard {
 // SqliteCheckpointStore (standalone)
 // ---------------------------------------------------------------------------
 
+/// Standalone SQLite-backed [`CheckpointStore`] for persisting projection
+/// positions independently of an event store.
 pub struct SqliteCheckpointStore {
     conn: Arc<Mutex<rusqlite::Connection>>,
 }
@@ -747,6 +764,9 @@ impl std::fmt::Debug for SqliteCheckpointStore {
 }
 
 impl SqliteCheckpointStore {
+    /// Open (or create) a SQLite checkpoint store at the configured path,
+    /// applying EventCore's default pragmas (WAL, plus the SQLCipher key when
+    /// configured and the `encryption` feature is enabled).
     pub fn new(config: SqliteConfig) -> Result<Self, SqliteEventStoreError> {
         let conn = open_connection(&config.path, config.encryption_key.as_deref())?;
         Ok(Self {
@@ -754,6 +774,7 @@ impl SqliteCheckpointStore {
         })
     }
 
+    /// Create an ephemeral in-memory checkpoint store, useful for tests.
     pub fn in_memory() -> Result<Self, SqliteEventStoreError> {
         let conn = open_in_memory_connection()?;
         Ok(Self {
@@ -775,6 +796,7 @@ impl SqliteCheckpointStore {
         }
     }
 
+    /// Create the `eventcore_subscription_versions` table if it does not exist.
     pub async fn migrate(&self) -> Result<(), SqliteEventStoreError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
@@ -827,12 +849,15 @@ impl CheckpointStore for SqliteCheckpointStore {
 // SqliteProjectorCoordinator (standalone)
 // ---------------------------------------------------------------------------
 
+/// Standalone in-process [`ProjectorCoordinator`] providing advisory locking
+/// so a single instance leads each subscription.
 #[derive(Debug, Clone, Default)]
 pub struct SqliteProjectorCoordinator {
     locks: Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 impl SqliteProjectorCoordinator {
+    /// Create a new coordinator with no leadership locks held.
     pub fn new() -> Self {
         Self::default()
     }

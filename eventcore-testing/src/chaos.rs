@@ -1,3 +1,25 @@
+//! Chaos testing for EventCore backends.
+//!
+//! This module provides [`ChaosEventStore`], a wrapper around any `EventStore`
+//! that injects probabilistic read/write failures and version conflicts. Use it
+//! to verify that command retry logic handles transient errors correctly.
+//!
+//! The canonical entry point is the [`ChaosEventStoreExt::with_chaos`] extension
+//! method, which is implemented for every `EventStore`:
+//!
+//! ```ignore
+//! use eventcore_memory::InMemoryEventStore;
+//! use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
+//!
+//! // Deterministic seed so failures are reproducible across runs.
+//! let base_store = InMemoryEventStore::new();
+//! let chaos_store =
+//!     base_store.with_chaos(ChaosConfig::deterministic().with_failure_probability(0.5));
+//!
+//! // `chaos_store` is itself an `EventStore`, so it can be passed to
+//! // `eventcore::execute()` like any other backend.
+//! ```
+
 use std::{future::Future, sync::Mutex};
 
 use eventcore_types::{
@@ -55,6 +77,24 @@ pub struct FailureProbability(f32);
 )]
 pub struct VersionConflictProbability(f32);
 
+/// Configuration controlling how a [`ChaosEventStore`] injects failures.
+///
+/// A `ChaosConfig` holds an optional deterministic seed plus the probabilities
+/// of injecting store failures and version conflicts. The probabilities default
+/// to `0.0` (no injection); use the builder methods to raise them.
+///
+/// Start from either [`ChaosConfig::default`] (random seed, no injection) or
+/// [`ChaosConfig::deterministic`] (fixed seed for reproducible runs), then chain
+/// [`with_failure_probability`](ChaosConfig::with_failure_probability) and
+/// [`with_version_conflict_probability`](ChaosConfig::with_version_conflict_probability).
+///
+/// ```ignore
+/// use eventcore_testing::chaos::ChaosConfig;
+///
+/// let config = ChaosConfig::deterministic()
+///     .with_failure_probability(0.25)
+///     .with_version_conflict_probability(0.1);
+/// ```
 #[derive(Debug, Clone)]
 pub struct ChaosConfig {
     deterministic_seed: Option<u64>,
@@ -63,6 +103,13 @@ pub struct ChaosConfig {
 }
 
 impl ChaosConfig {
+    /// Creates a config with a fixed seed so injected failures are reproducible.
+    ///
+    /// The failure and version-conflict probabilities still default to `0.0`;
+    /// chain [`with_failure_probability`](ChaosConfig::with_failure_probability)
+    /// and
+    /// [`with_version_conflict_probability`](ChaosConfig::with_version_conflict_probability)
+    /// to enable injection.
     pub fn deterministic() -> Self {
         Self {
             deterministic_seed: Some(0),
@@ -70,12 +117,20 @@ impl ChaosConfig {
         }
     }
 
+    /// Sets the probability of injecting a store failure on reads and appends.
+    ///
+    /// `probability` is clamped to the `[0.0, 1.0]` range, where `0.0` never
+    /// injects a failure and `1.0` always does.
     pub fn with_failure_probability(mut self, probability: f32) -> Self {
         self.failure_probability = FailureProbability::try_new(probability.clamp(0.0, 1.0))
             .expect("clamped value is always valid");
         self
     }
 
+    /// Sets the probability of injecting a version conflict on appends.
+    ///
+    /// `probability` is clamped to the `[0.0, 1.0]` range, where `0.0` never
+    /// injects a conflict and `1.0` always does.
     pub fn with_version_conflict_probability(mut self, probability: f32) -> Self {
         self.version_conflict_probability =
             VersionConflictProbability::try_new(probability.clamp(0.0, 1.0))
@@ -96,10 +151,33 @@ impl Default for ChaosConfig {
     }
 }
 
+/// Extension trait that wraps any `EventStore` in a [`ChaosEventStore`].
+///
+/// This is the canonical entry point for chaos testing. It is implemented for
+/// every `EventStore`, so call `with_chaos` directly on a base store:
+///
+/// ```ignore
+/// use eventcore_memory::InMemoryEventStore;
+/// use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
+///
+/// let chaos_store =
+///     InMemoryEventStore::new().with_chaos(ChaosConfig::deterministic().with_failure_probability(0.5));
+/// ```
 pub trait ChaosEventStoreExt: Sized {
+    /// Wraps `self` in a [`ChaosEventStore`] configured by `config`.
     fn with_chaos(self, config: ChaosConfig) -> ChaosEventStore<Self>;
 }
 
+/// An `EventStore` wrapper that injects probabilistic failures and conflicts.
+///
+/// `ChaosEventStore` forwards reads and appends to the wrapped store, but first
+/// rolls against the probabilities in its [`ChaosConfig`]: it may return a
+/// `StoreFailure` on either operation, or a `VersionConflict` on appends. Because
+/// it implements `EventStore`, it can be passed anywhere a backend is expected,
+/// including `eventcore::execute()`.
+///
+/// Prefer constructing one via [`ChaosEventStoreExt::with_chaos`] rather than
+/// calling [`ChaosEventStore::new`] directly.
 pub struct ChaosEventStore<S> {
     store: S,
     config: ChaosConfig,
@@ -107,6 +185,11 @@ pub struct ChaosEventStore<S> {
 }
 
 impl<S> ChaosEventStore<S> {
+    /// Wraps `store` with chaos injection driven by `config`.
+    ///
+    /// If the config carries a deterministic seed, the internal RNG is seeded
+    /// from it for reproducible failures; otherwise a random seed is used.
+    /// Most callers should use [`ChaosEventStoreExt::with_chaos`] instead.
     pub fn new(store: S, config: ChaosConfig) -> Self {
         let rng = match config.deterministic_seed {
             Some(seed) => StdRng::seed_from_u64(seed),

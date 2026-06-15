@@ -4,7 +4,28 @@ Events are immutable and permanent. Encrypt sensitive data before storing it.
 
 ## Storage-Level Encryption with SQLite
 
-The `eventcore-sqlite` crate uses SQLCipher, which provides transparent AES-256 encryption of the entire database file. This encrypts all event data, metadata, indexes, and checkpoints at rest with zero application code changes:
+The `eventcore-sqlite` crate can use SQLCipher to provide transparent AES-256
+encryption of the entire database file, encrypting all event data, metadata,
+indexes, and checkpoints at rest. **At-rest encryption is not enabled by
+default.** The crate's default `bundled` feature links a vanilla SQLite that
+has no encryption support. To get an encrypted database you must build
+`eventcore-sqlite` with the non-default `encryption` feature:
+
+```toml
+# Cargo.toml
+[dependencies]
+eventcore-sqlite = { version = "1", features = ["encryption"] }
+```
+
+> **Warning:** Without the `encryption` feature, setting `encryption_key` is
+> silently ignored — the database is stored in **plaintext**. Internally the
+> store issues `PRAGMA key`, which is a no-op on the default vanilla/bundled
+> SQLite, so no error is raised even though nothing is encrypted. Always
+> enable the `encryption` feature when you intend to store data encrypted at
+> rest, and verify it before handling sensitive data.
+
+With the `encryption` feature enabled, supplying an `encryption_key` produces
+an encrypted database with no further application code changes:
 
 ```rust
 use eventcore_sqlite::{SqliteEventStore, SqliteConfig};
@@ -17,7 +38,9 @@ store.migrate().await?;
 // All data written to this store is encrypted on disk
 ```
 
-When no `encryption_key` is provided, the SQLite store operates as a standard unencrypted database. Storage-level encryption protects against physical media theft but does not replace field-level encryption for defense-in-depth.
+When no `encryption_key` is provided, the SQLite store operates as a standard
+unencrypted database. Storage-level encryption protects against physical media
+theft but does not replace field-level encryption for defense-in-depth.
 
 ## Encryption Strategies
 

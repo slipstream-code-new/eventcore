@@ -1,7 +1,13 @@
 //! Projection runtime components for building and running read models.
 //!
-//! This module provides the runtime infrastructure for event projection:
-//! - `ProjectionRunner`: Orchestrates projector execution with event polling
+//! This module provides the runtime infrastructure for event projection. Its
+//! public surface is:
+//! - [`run_projection`]: The primary entry point for running a projector
+//! - [`ProjectionConfig`]: Configuration for projection runs (batch vs. continuous)
+//! - [`ProjectionError`]: Errors returned by [`run_projection`]
+//!
+//! Internally, `ProjectionRunner` is the building block that orchestrates
+//! projector execution with event polling.
 
 use eventcore_types::{
     BackoffMultiplier, CheckpointStore, Event, EventReader, MaxConsecutiveFailures,
@@ -337,7 +343,7 @@ where
     /// # Returns
     ///
     /// - `Ok(())`: All available events were processed successfully
-    /// - `Err(E)`: An unrecoverable error occurred during projection
+    /// - `Err(ProjectionError)`: An unrecoverable error occurred during projection
     ///
     /// # Errors
     ///
@@ -415,8 +421,8 @@ pub enum ProjectionError {
 /// Configuration for running projections via [`run_projection`].
 ///
 /// `ProjectionConfig` provides a builder-style API for configuring projection
-/// behavior. The default configuration produces batch mode with sensible timing
-/// defaults, producing batch mode behavior.
+/// behavior. The default configuration uses batch mode with sensible timing
+/// defaults.
 ///
 /// # Example
 ///

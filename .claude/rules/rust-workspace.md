@@ -6,16 +6,17 @@ globs: "**/*.rs,Cargo.toml"
 
 ## Workspace Structure
 
-| Crate                | Purpose                                                            |
-| -------------------- | ------------------------------------------------------------------ |
-| `eventcore`          | Main library: `execute()`, `run_projection()`, re-exports          |
-| `eventcore-types`    | Shared vocabulary: traits (`EventStore`, `CommandLogic`) and types |
-| `eventcore-macros`   | `#[derive(Command)]`, `require!`, `emit!` macro implementations    |
-| `eventcore-postgres` | PostgreSQL backend with ACID transactions and advisory locks       |
-| `eventcore-sqlite`   | SQLite backend with optional SQLCipher encryption                  |
-| `eventcore-memory`   | Zero-dependency in-memory store for tests and development          |
-| `eventcore-testing`  | Contract tests, chaos harness, `EventCollector` for testing        |
-| `eventcore-examples` | Integration tests demonstrating EventCore patterns                 |
+| Crate                | Purpose                                                               |
+| -------------------- | --------------------------------------------------------------------- |
+| `eventcore`          | Main library: `execute()`, `run_projection()`, `require!`, re-exports |
+| `eventcore-types`    | Shared vocabulary: traits (`EventStore`, `CommandLogic`) and types    |
+| `eventcore-macros`   | `#[derive(Command)]` macro implementation                             |
+| `eventcore-postgres` | PostgreSQL backend with ACID transactions and advisory locks          |
+| `eventcore-sqlite`   | SQLite backend with optional SQLCipher encryption                     |
+| `eventcore-memory`   | Zero-dependency in-memory store for tests and development             |
+| `eventcore-fs`       | File-based, git-mergeable event store backend                         |
+| `eventcore-testing`  | Contract tests, chaos harness, `EventCollector` for testing           |
+| `eventcore-examples` | Integration tests demonstrating EventCore patterns                    |
 
 ## Domain Types
 

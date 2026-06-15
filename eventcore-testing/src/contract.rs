@@ -515,6 +515,7 @@ where
 ///     suite = my_backend,
 ///     make_store = || MyEventStore::new(),
 ///     make_checkpoint_store = || MyCheckpointStore::new(),
+///     make_coordinator = || MyProjectorCoordinator::new(),
 /// }
 /// ```
 ///

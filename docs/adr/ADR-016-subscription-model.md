@@ -7,6 +7,7 @@ superseded by ADR-021
 ## Implementation Status
 
 **Implemented:**
+
 - `EventSubscription` trait with `subscribe()` method returning `Stream<Item = Result<E, SubscriptionError>>`
 - `Subscribable` trait for subscription type filtering (ADR-020)
 - `SubscriptionQuery` with `filter_stream_prefix()` and `filter_event_type_name()` filters
@@ -14,6 +15,7 @@ superseded by ADR-021
 - Push-based `futures::Stream` delivery
 
 **Not Yet Implemented:**
+
 - `SubscriptionCoordinator` trait (see eventcore-018)
 - `ActiveSubscription` with checkpoint management
 - Consumer group coordination and rebalancing
@@ -80,7 +82,7 @@ The fundamental question was whether to extend EventStore or create a new trait.
 - **Commands modify state atomically**—they must enforce aggregate boundaries, validate business rules, and guarantee consistency
 - **Subscriptions observe state changes over time**—they must survive failures, resume from checkpoints, and handle rebalancing across processes
 
-Conflating these in one trait would force every backend to support both patterns, even when that doesn't make sense (e.g., file-based event stores cannot efficiently push events). More critically, it would blur the conceptual boundary between *modifying* the event stream and *observing* it—a distinction central to CQRS.
+Conflating these in one trait would force every backend to support both patterns, even when that doesn't make sense (e.g., file-based event stores cannot efficiently push events). More critically, it would blur the conceptual boundary between _modifying_ the event stream and _observing_ it—a distinction central to CQRS.
 
 ADR-002 anticipated this separation. Implementation experience confirmed it: subscription coordination requires heartbeat tables, rebalancing logic, and checkpoint management—none of which belong in the write path.
 
@@ -117,7 +119,7 @@ External coordination (etcd, Consul, Zookeeper) was rejected because:
 2. **Integration complexity**: Application code must coordinate lock lifecycle with subscription lifecycle
 3. **Semantic mismatch**: Generic locks don't understand subscription-specific concepts like rebalancing or checkpoint resumption
 
-Kafka's consumer group model proves this works: coordination is *part of* the streaming system, not bolted on afterward. EventCore follows this pattern, using PostgreSQL advisory locks for coordination when PostgreSQL is the event backend. This means production-ready coordination with zero additional infrastructure.
+Kafka's consumer group model proves this works: coordination is _part of_ the streaming system, not bolted on afterward. EventCore follows this pattern, using PostgreSQL advisory locks for coordination when PostgreSQL is the event backend. This means production-ready coordination with zero additional infrastructure.
 
 **Why Separate SubscriptionCoordinator Trait:**
 
@@ -127,6 +129,7 @@ Coordination could be methods on EventSubscription, but separating them clarifie
 - `SubscriptionCoordinator` assigns subscriptions to processes (control plane)
 
 This separation allows:
+
 - Single-process applications to ignore coordination entirely
 - Using different backends for events vs coordination (PostgreSQL for events, etcd for coordination)
 - Testing event delivery without coordination complexity
@@ -162,13 +165,13 @@ while let Some(event) = active.events.next().await {
 }
 ```
 
-This design makes ownership validation automatic—consumers cannot checkpoint without going through the coordinator. The coordinator validates ownership and handles persistence. *Where* checkpoints are stored is a coordinator configuration choice (same database as events, separate storage, etc.), and *when* to checkpoint remains consumer choice (every event, batched, on timeout).
+This design makes ownership validation automatic—consumers cannot checkpoint without going through the coordinator. The coordinator validates ownership and handles persistence. _Where_ checkpoints are stored is a coordinator configuration choice (same database as events, separate storage, etc.), and _when_ to checkpoint remains consumer choice (every event, batched, on timeout).
 
 **Why StreamVersion for Checkpoint Type:**
 
 Checkpoints could be opaque strings (backend-specific format) or a typed value. `StreamVersion` was chosen because:
 
-1. **Semantic alignment**: Checkpoints *are* stream positions—the same concept as EventStore's `StreamVersion`
+1. **Semantic alignment**: Checkpoints _are_ stream positions—the same concept as EventStore's `StreamVersion`
 2. **Type reuse**: Consistency across the API reduces cognitive load
 3. **No parsing overhead**: Backends don't serialize/deserialize; they use the value directly
 
@@ -335,6 +338,7 @@ Associated types better express "backends that support coordination provide this
 - **ADR-003**: Type System Patterns for Domain Safety (type-safe APIs over strings)
 - **ADR-012**: Event Trait for Domain-First Design (StreamId as aggregate identity)
 - **ARCHITECTURE.md**: For detailed trait signatures, struct definitions, and implementation examples (this ADR documents WHY, ARCHITECTURE.md documents HOW)
+  - _Editor's note: a standalone `ARCHITECTURE.md` was never created; the architecture is now documented in `docs/manual/01-introduction/04-architecture.md`._
 - **Martin Dilger "Understanding Event Sourcing"** Ch2-4: Projections and read models
 - **EventStoreDB subscription patterns**: Inspiration for query types and coordination model
 - **Kafka consumer groups**: Model for distributed subscription coordination

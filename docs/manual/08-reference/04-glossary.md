@@ -66,25 +66,25 @@ A trait that defines which streams a command needs to read from. Typically imple
 
 A trait containing the domain logic for command execution. Separates business logic from infrastructure concerns.
 
-### EventId
+### StreamVersion
 
-A UUIDv7 identifier for events that provides both uniqueness and chronological ordering across the entire event store.
+A monotonically increasing count of the events in a single stream. EventCore uses it for optimistic concurrency control. Events are not assigned a public per-event identifier type.
 
-### EventVersion
+### StreamPosition
 
-A monotonically increasing number representing the position of an event within its stream, starting from 0.
+A UUIDv7 value identifying an event's position in the global event order across the entire store. Projections track their progress using `StreamPosition`.
 
 ### ExecutionResponse
 
-The result of executing a command, containing information about events written, affected streams, and execution metadata.
+The result of a successful command execution. Exposes `attempts()` (the number of attempts made; 1 = succeeded on the first try). It does not expose written events or affected streams.
 
 ### StreamDeclarations
 
 A type-safe value representing the streams a command declares. Commands expose these via `command.stream_declarations()`. The executor uses StreamDeclarations to enforce that commands only write to streams they declared.
 
-### StreamData
+### EventStream
 
-The collection of events from a single stream, along with metadata like the current version.
+The type returned when reading a stream: an async stream that yields each event as a `Result<E, EventStoreError>` in stream-version order, without materializing the entire history in memory at once.
 
 ### StreamId
 
@@ -488,42 +488,6 @@ Rust's system for managing memory through compile-time tracking of resource owne
 **TLS** - Transport Layer Security
 **UUID** - Universally Unique Identifier
 **XML** - eXtensible Markup Language
-
-## EventCore Command Reference
-
-Common EventCore CLI commands and their purposes:
-
-### `eventcore-cli`
-
-The main command-line interface for EventCore operations.
-
-### `health-check`
-
-Verify system health and connectivity.
-
-### `migrate`
-
-Run database migrations.
-
-### `config validate`
-
-Validate configuration files and settings.
-
-### `projections status`
-
-Check the status of all projections.
-
-### `projections rebuild`
-
-Rebuild projections from event history.
-
-### `streams list`
-
-List available event streams.
-
-### `events export`
-
-Export events for backup or analysis.
 
 ## Common Patterns
 

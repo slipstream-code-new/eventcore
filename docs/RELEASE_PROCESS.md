@@ -16,7 +16,7 @@ The project uses **[release-plz](https://release-plz.dev/)** for fully automated
 
 **Phase 2: Publication** (`.forgejo/workflows/publish.yml`)
 
-- Triggered when release PR is merged (commit message starts with "chore: release")
+- Triggered when release PR is merged (commit message starts with "chore(release):")
 - Publishes crates to crates.io in dependency order
 - Creates Forgejo release with aggregated changelog
 - Creates git tags for the release
@@ -43,14 +43,16 @@ release-plz automatically determines and uses the correct publishing order based
 4. `eventcore-testing` (depends on eventcore-types - testing utilities)
 5. `eventcore-memory` (depends on eventcore-types)
 6. `eventcore-postgres` (depends on eventcore-types)
+7. `eventcore-sqlite` (depends on eventcore-types)
+8. `eventcore-fs` (depends on eventcore-types)
 
-**Note:** `eventcore-types` and `eventcore-testing` are not yet published to crates.io. They will be published for the first time when the automated release workflow runs.
+**Note:** All eight library crates above (`eventcore-types`, `eventcore-macros`, `eventcore`, `eventcore-testing`, `eventcore-memory`, `eventcore-postgres`, `eventcore-sqlite`, and `eventcore-fs`) are published to crates.io; the workspace graduated to 1.0.0 in its first stable release. The non-library crates (`eventcore-demo`, `eventcore-bench`, `eventcore-stress`) set `publish = false` and are not published.
 
-The workflow includes a 30-second delay between publishing each crate to ensure crates.io has time to index each package before dependent crates are published.
+release-plz publishes crates in dependency order and retries transient failures with exponential backoff (3 attempts). There is no fixed inter-crate delay in the workflow.
 
 ### Version Lockstep Enforcement
 
-**Per ADR-025**, all workspace crates must maintain **identical major.minor versions**, while patch versions may differ independently. This ensures a clear compatibility guarantee for users: matching major/minor versions are always compatible.
+**Per ADR-025**, all workspace crates must maintain **identical major.minor.patch versions** (full lockstep). This ensures a clear compatibility guarantee for users: every published crate at a given version is built and released together.
 
 **How it is enforced:**
 The workspace `Cargo.toml` defines a single `[workspace.package] version`, and
@@ -115,6 +117,16 @@ cargo publish
 cd ..
 # Wait for crates.io to index the package
 
+cd eventcore-sqlite
+cargo publish
+cd ..
+# Wait for crates.io to index the package
+
+cd eventcore-fs
+cargo publish
+cd ..
+# Wait for crates.io to index the package
+
 cd eventcore
 cargo publish
 cd ..
@@ -127,6 +139,8 @@ git tag -a eventcore-macros-v0.X.Y -m "Release eventcore-macros v0.X.Y"
 git tag -a eventcore-testing-v0.X.Y -m "Release eventcore-testing v0.X.Y"
 git tag -a eventcore-memory-v0.X.Y -m "Release eventcore-memory v0.X.Y"
 git tag -a eventcore-postgres-v0.X.Y -m "Release eventcore-postgres v0.X.Y"
+git tag -a eventcore-sqlite-v0.X.Y -m "Release eventcore-sqlite v0.X.Y"
+git tag -a eventcore-fs-v0.X.Y -m "Release eventcore-fs v0.X.Y"
 
 # 4. Push tags to Forgejo
 git push origin --tags
@@ -139,7 +153,7 @@ Replace `0.X.Y` with the actual version number.
 The release workflow is split into two parts:
 
 1. **Release PR Creation**: Runs on push to main when it's NOT a release PR merge
-2. **Package Publishing**: Runs on push to main when it IS a release PR merge (commit message starts with "chore: release")
+2. **Package Publishing**: Runs on push to main when it IS a release PR merge (commit message starts with "chore(release):")
 
 This separation prevents manual version bumps from triggering immediate publishing.
 
@@ -164,6 +178,8 @@ cargo owner --list eventcore-memory
 cargo owner --list eventcore-postgres
 cargo owner --list eventcore-types
 cargo owner --list eventcore-testing
+cargo owner --list eventcore-sqlite
+cargo owner --list eventcore-fs
 ```
 
 ### Credential Rotation

@@ -72,20 +72,20 @@ struct CommandAuthorizationLayer<A: StreamAuthorization> {
 impl<A: StreamAuthorization> CommandAuthorizationLayer<A> {
     async fn authorize_command(
         &self,
-        command: &impl Command,
+        command: &impl CommandStreams,
         user: &User,
     ) -> Result<(), AuthError> {
         // Check permissions for all declared streams
-        for stream_id in command.stream_declarations() {
-            if !self.auth.can_read(user, &stream_id).await {
-                return Err(AuthError::Forbidden(stream_id));
+        for stream_id in command.stream_declarations().iter() {
+            if !self.auth.can_read(user, stream_id).await {
+                return Err(AuthError::Forbidden(stream_id.clone()));
             }
         }
 
         // Write permissions use same declared streams (writes are restricted to declared streams)
-        for stream_id in command.stream_declarations() {
-            if !self.auth.can_write(user, &stream_id).await {
-                return Err(AuthError::Forbidden(stream_id));
+        for stream_id in command.stream_declarations().iter() {
+            if !self.auth.can_write(user, stream_id).await {
+                return Err(AuthError::Forbidden(stream_id.clone()));
             }
         }
 

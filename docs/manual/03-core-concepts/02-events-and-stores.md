@@ -35,80 +35,100 @@ struct CustomerEmailChanged {
 
 ## Event Structure in EventCore
 
-### Core Event Types
+### Domain Events Implement the `Event` Trait
 
-```rust
-/// Your domain event
+In EventCore your events are plain domain types. There is no framework
+wrapper struct around them — a type becomes an event by implementing the
+`Event` trait, which ties each event to the stream (aggregate) it belongs
+to:
+
+```rust,ignore
+use eventcore::{Event, StreamId};
+use serde::{Deserialize, Serialize};
+
+/// Your domain event. Each variant carries the data of one business fact
+/// and knows which stream it belongs to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderShipped {
-    pub order_id: OrderId,
-    pub tracking_number: TrackingNumber,
-    pub carrier: Carrier,
-    pub shipped_at: DateTime<Utc>,
+enum OrderEvent {
+    OrderShipped {
+        order_id: StreamId,
+        tracking_number: TrackingNumber,
+        carrier: Carrier,
+        shipped_at: DateTime<Utc>,
+    },
 }
 
-/// Event ready to be written
-pub struct EventToWrite<E> {
-    pub stream_id: StreamId,
-    pub payload: E,
-    pub metadata: Option<EventMetadata>,
-    pub expected_version: ExpectedVersion,
+impl Event for OrderEvent {
+    fn stream_id(&self) -> &StreamId {
+        match self {
+            OrderEvent::OrderShipped { order_id, .. } => order_id,
+        }
+    }
+
+    fn event_type_name() -> &'static str {
+        "OrderEvent"
+    }
 }
-
-// Events are stored and returned as your concrete event type.
-// EventCore does not wrap events in a StoredEvent struct —
-// the Event trait's stream_id() method provides stream routing,
-// and StreamPosition (UUIDv7) provides global ordering.
 ```
 
-### Event IDs and Ordering
+The `Event` trait requires two things:
 
-EventCore uses UUIDv7 for event IDs, providing:
+- `stream_id()` — returns the stream this event belongs to. In DDD terms,
+  this is the aggregate identity. Events carry their own stream, so there is
+  no separate "event to write" envelope.
+- `event_type_name()` — a stable name written to the `event_type` storage
+  column for auditing and debugging. It is **not** used for deserialization,
+  so it is safe to keep it stable even if the Rust type moves between
+  modules.
 
-```rust
-// UUIDv7 properties:
-// - Globally unique
-// - Time-ordered (sortable)
-// - Millisecond precision timestamp
-// - No coordination required
+Events are stored and returned as your concrete event type. EventCore does
+**not** wrap events in a `StoredEvent` envelope.
 
-let event1 = EventId::new();
-let event2 = EventId::new();
+### Event Ordering
 
-// Later events have higher IDs
-assert!(event2 > event1);
+EventCore assigns each appended event a global `StreamPosition`, which is a
+UUIDv7 (timestamp-ordered UUID). This gives you:
 
-// Extract timestamp
-let timestamp = event1.timestamp();
-```
+- **Global uniqueness** — no coordination required across streams
+- **Time ordering** — positions are monotonically increasing and globally
+  sortable, so later events always have higher positions
+- **Resumable processing** — projectors track their progress by storing the
+  last `StreamPosition` they processed
+
+`StreamPosition` is an opaque, ordered value: you compare and sort positions,
+you do not construct them by hand. The store assigns them at append time and
+projectors receive them alongside each event. Within a single stream, the
+ordering is captured by `StreamVersion` (see [Stream
+Versioning](#stream-versioning) below).
 
 ### Event Metadata
 
-Every event carries metadata for auditing and debugging:
+EventCore does not impose a metadata schema. Per the library's infrastructure
+neutrality principle, concerns like "who triggered this" (actor), correlation
+IDs, and causation IDs are **owned by your application**, not by EventCore.
 
-```rust
-pub struct EventMetadata {
-    /// Who triggered this event
-    pub user_id: Option<UserId>,
+Model whatever audit context your domain needs as ordinary fields on your
+event variants — they are part of the business fact and serialized with the
+rest of the payload:
 
-    /// Correlation ID for tracking across services
-    pub correlation_id: CorrelationId,
-
-    /// What caused this event (previous event ID)
-    pub causation_id: Option<CausationId>,
-
-    /// Custom metadata
-    pub custom: HashMap<String, Value>,
+```rust,ignore
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum CustomerEvent {
+    EmailChanged {
+        customer_id: StreamId,
+        old_email: Email,
+        new_email: Email,
+        // Application-owned audit context, carried in the event itself.
+        changed_by: UserId,
+        changed_at: DateTime<Utc>,
+        correlation_id: CorrelationId,
+    },
 }
-
-// Building metadata
-let metadata = EventMetadata::new()
-    .with_user_id(UserId::from("alice@example.com"))
-    .with_correlation_id(CorrelationId::new())
-    .caused_by(&previous_event)
-    .with_custom("ip_address", "192.168.1.1")
-    .with_custom("user_agent", "MyApp/1.0");
 ```
+
+This keeps the audit trail immutable and self-contained: the metadata lives
+inside the event, replays deterministically, and never depends on a separate
+framework table whose schema you do not control.
 
 ## Event Store Abstraction
 
@@ -153,50 +173,64 @@ let events: Vec<MyEvent> = collect_events(stream).await?;
 
 ## Stream Versioning
 
-Streams maintain version numbers for optimistic concurrency:
+Each stream has a `StreamVersion` — an event count that starts at `0` for an
+empty stream and increments by one with every appended event. EventCore uses
+this version for optimistic concurrency control: a write declares the version
+it expects each stream to be at, and the append is rejected if reality has
+moved on.
 
-```rust
-pub struct StreamEvents<E> {
-    pub stream_id: StreamId,
-    pub version: EventVersion,    // Current version after these events
-    pub events: Vec<E>,
-}
+```rust,ignore
+// StreamVersion and StreamWrites live in eventcore_types (not re-exported
+// from the eventcore facade), since application code rarely touches them.
+use eventcore_types::StreamVersion;
 
-// Version control options
-pub enum ExpectedVersion {
-    /// Stream must not exist
-    NoStream,
-
-    /// Stream must be at this exact version
-    Exact(EventVersion),
-
-    /// Stream must exist but any version is OK
-    Any,
-
-    /// No version check (dangerous!)
-    NoCheck,
-}
+// Versions start at 0 (empty stream) and increment as events are appended.
+let empty = StreamVersion::new(0);
+let after_one_event = empty.increment(); // StreamVersion::new(1)
 ```
 
-### Using Version Control
+You almost never construct `StreamVersion` or assemble writes by hand. The
+`execute()` function reads the declared streams, records their current
+versions, runs your command's `handle()`, and appends the resulting events
+under those versions atomically. If another writer advanced a stream in the
+meantime, the append fails with
+`EventStoreError::VersionConflict { stream_id, expected, actual }`, and
+`execute()` automatically reloads and retries according to the
+[`RetryPolicy`](./05-error-handling.md).
 
-```rust
-// First write - stream shouldn't exist
-let first_event = EventToWrite {
-    stream_id: stream_id.clone(),
-    payload: AccountOpened { /* ... */ },
-    metadata: None,
-    expected_version: ExpectedVersion::NoStream,
-};
+### How the Write Path Actually Works
 
-// Subsequent writes - check version
-let next_event = EventToWrite {
-    stream_id: stream_id.clone(),
-    payload: MoneyDeposited { /* ... */ },
-    metadata: None,
-    expected_version: ExpectedVersion::Exact(EventVersion::new(1)),
-};
+When you do need to assemble a write directly against the `EventStore` trait
+(for example, when building or testing a backend), the unit of work is
+`StreamWrites`. You register each stream with its expected version, then
+append events whose `stream_id()` matches a registered stream:
+
+```rust,ignore
+use eventcore_types::{StreamVersion, StreamWrites};
+
+// Build the atomic write batch the same way execute() does internally.
+let writes = StreamWrites::new()
+    // First write: the stream is expected to be empty (version 0).
+    .register_stream(account_id.clone(), StreamVersion::new(0))
+    .and_then(|w| w.append(BankEvent::AccountOpened { /* ... */ }))
+    .and_then(|w| w.append(BankEvent::MoneyDeposited { /* ... */ }))
+    .expect("builder should succeed");
+
+// Append atomically. Fails with EventStoreError::VersionConflict if the
+// stream's current version is not the expected version.
+store.append_events(writes).await?;
 ```
+
+`register_stream` enforces a single expected version per stream — registering
+the same stream twice with different versions returns
+`EventStoreError::ConflictingExpectedVersions`. Appending an event whose
+stream was never registered returns `EventStoreError::UndeclaredStream`.
+
+> **In application code, prefer `execute()`.** Constructing `StreamWrites`
+> directly bypasses state reconstruction and business-rule validation.
+> Commands produce events from `handle()`, and `execute()` is the canonical
+> entry point that wires versioning, retries, and atomic append together. See
+> [Commands and the Macro System](./01-commands-and-macros.md).
 
 ## Storage Adapters
 
@@ -204,18 +238,40 @@ let next_event = EventToWrite {
 
 The production-ready adapter with ACID guarantees:
 
-```rust
-use eventcore_postgres::{PostgresEventStore, PostgresConfig};
+```rust,ignore
+use eventcore_postgres::PostgresEventStore;
 
-let config = PostgresConfig::new("postgresql://localhost/eventcore")
-    .with_pool_size(20)
-    .with_schema("eventcore");
+// Connect with default pool settings.
+let event_store = PostgresEventStore::new("postgresql://localhost/eventcore").await?;
 
-let event_store = PostgresEventStore::new(config).await?;
-
-// Initialize schema (one time)
-event_store.initialize().await?;
+// Apply the bundled schema migrations (one time). `migrate()` panics on
+// failure rather than returning an error.
+event_store.migrate().await;
 ```
+
+To customize the connection pool, build a `PostgresConfig` and use
+`with_config`. The config exposes only pool-level knobs — `max_connections`,
+`acquire_timeout`, and `idle_timeout` (defaults: 10 connections, 30s acquire,
+600s idle):
+
+```rust,ignore
+use std::num::NonZeroU32;
+use std::time::Duration;
+use eventcore_postgres::{MaxConnections, PostgresConfig, PostgresEventStore};
+
+let config = PostgresConfig {
+    max_connections: MaxConnections::new(NonZeroU32::new(20).expect("non-zero")),
+    acquire_timeout: Duration::from_secs(30),
+    idle_timeout: Duration::from_secs(600),
+};
+
+let event_store =
+    PostgresEventStore::with_config("postgresql://localhost/eventcore", config).await?;
+event_store.migrate().await;
+```
+
+If you already manage your own `sqlx` pool, hand it over with
+`PostgresEventStore::from_pool(pool)`.
 
 PostgreSQL schema:
 
@@ -242,24 +298,31 @@ CREATE TABLE events (
 
 ### SQLite Adapter
 
-Embedded event store for single-process applications, CLI tools, and desktop/mobile apps. Uses SQLCipher (a SQLite superset) with optional encryption:
+Embedded event store for single-process applications, CLI tools, and desktop/mobile apps:
 
-```rust
+```rust,ignore
 use eventcore_sqlite::{SqliteEventStore, SqliteConfig};
 use std::path::PathBuf;
 
 // File-backed store
 let config = SqliteConfig {
     path: PathBuf::from("./my-app-events.db"),
-    encryption_key: None, // Optional: Some("passphrase".to_string()) for encryption
+    encryption_key: None,
 };
 let store = SqliteEventStore::new(config)?;
 store.migrate().await?;
 
-// In-memory store (for testing with persistence semantics)
+// In-memory store (for testing with SQLite persistence semantics)
 let store = SqliteEventStore::in_memory()?;
 store.migrate().await?;
 ```
+
+> **At-rest encryption is opt-in at compile time.** The `encryption_key`
+> field is only honored when the crate's non-default `encryption` Cargo
+> feature is enabled (which builds against SQLCipher). On the default
+> `bundled` build, SQLite is plain and `encryption_key` is **silently
+> ignored** — the database is written unencrypted. Enable the `encryption`
+> feature before relying on a key.
 
 SQLite schema:
 
@@ -284,18 +347,33 @@ CREATE INDEX idx_eventcore_events_stream_id
 
 Perfect for testing and development:
 
-```rust
+```rust,ignore
 use eventcore_memory::InMemoryEventStore;
 
-let event_store = InMemoryEventStore::<MyEvent>::new();
-
-// Optionally add chaos for testing
-let chaotic_store = event_store
-    .with_chaos(ChaosConfig {
-        failure_probability: 0.1,  // 10% chance of failure
-        latency_ms: Some(50..200), // Random latency
-    });
+// Not generic — one store handles whatever event types your commands produce.
+let event_store = InMemoryEventStore::new();
 ```
+
+For fault-injection testing, the `eventcore-testing` crate provides a chaos
+wrapper via the `ChaosEventStoreExt` extension trait. Configure failure
+injection with the `ChaosConfig` builder:
+
+```rust,ignore
+use eventcore_memory::InMemoryEventStore;
+use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
+
+// Deterministic chaos (seeded) with a 10% chance of injected failures.
+let chaotic_store = InMemoryEventStore::new().with_chaos(
+    ChaosConfig::deterministic()
+        .with_failure_probability(0.1)
+        .with_version_conflict_probability(0.05),
+);
+```
+
+`ChaosConfig` injects store failures and synthetic version conflicts so you
+can exercise your retry handling; use `ChaosConfig::default()` for
+non-deterministic behavior or `ChaosConfig::deterministic()` for a seeded,
+reproducible run.
 
 ## Event Design Patterns
 
@@ -328,6 +406,17 @@ enum OrderEvent {
 ```
 
 ### Event Evolution
+
+EventCore has **no upcasting subsystem, schema registry, or event
+serializer** — schema evolution is handled entirely with serde. Per
+[ADR-0035](../../adr/ADR-0035-event-schema-evolution-via-enum-variants.md),
+there are two sanctioned techniques:
+
+1. **Additive changes** — add a field with `#[serde(default)]` so old events
+   (which lack the field) still deserialize.
+2. **Incompatible changes** — introduce a **new enum variant** rather than
+   mutating an existing one. Old events keep matching their original variant;
+   handlers and projectors match all variants.
 
 Design events to evolve gracefully:
 
@@ -373,263 +462,256 @@ enum UserRegisteredVersioned {
 
 ### Event Enrichment
 
-Add context to events:
+If your domain needs ambient context (session, request, environment), put it
+in the event itself — there is no EventCore "metadata envelope" to attach it
+to. The pattern below is **application-level, illustrative code**: EventCore
+defines none of these types. Capture the context at the command boundary and
+include it in the event's fields so it is serialized and replayed with the
+rest of the payload:
 
-```rust
-trait EventEnricher {
-    fn enrich<E>(&self, event: E) -> EnrichedEvent<E>;
-}
-
-struct EnrichedEvent<E> {
-    pub event: E,
-    pub context: EventContext,
-}
-
-struct EventContext {
-    pub session_id: SessionId,
-    pub request_id: RequestId,
-    pub feature_flags: HashMap<String, bool>,
-    pub environment: Environment,
+```rust,ignore
+// Application-level pattern — not an EventCore API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OrderPlaced {
+    order_id: StreamId,
+    items: Vec<Item>,
+    // Ambient context modeled as ordinary fields on the event.
+    session_id: SessionId,
+    request_id: RequestId,
+    environment: Environment,
 }
 ```
 
 ## Querying Events
 
-### Read Options
+### Reading a Single Stream
 
-Control how events are read:
+The `EventStore` trait exposes one read operation: `read_stream`, which takes
+a `StreamId` and returns a lazy `EventStream<E>` of that stream's events in
+version order (oldest to newest). There are no read-option flags — you read
+the whole stream and fold it. To materialize the history into a `Vec`, pass
+the stream to the `collect_events` helper:
 
-```rust
-let options = ReadOptions::default()
-    .from_version(EventVersion::new(10))    // Start from version 10
-    .to_version(EventVersion::new(20))      // Up to version 20
-    .max_events(100)                        // Limit results
-    .backwards();                           // Read in reverse
+```rust,ignore
+use eventcore::{collect_events, EventStream, StreamId};
 
-let events = event_store
-    .read_stream(&stream_id, options)
-    .await?;
+let stream_id = StreamId::try_new("order-123").expect("valid stream id");
+let stream: EventStream<OrderEvent> = store.read_stream(stream_id).await?;
+let events: Vec<OrderEvent> = collect_events(stream).await?;
 ```
+
+Because `read_stream` yields events lazily, the executor folds them into
+command state one at a time — the memory win matters for large streams.
+
+> **Most applications never call `read_stream` directly.** `execute()` reads
+> the declared streams, folds them through `apply()`, and reconstructs state
+> for you. Direct reads are for projections and ad-hoc inspection.
 
 ### Reading Multiple Streams
 
-For multi-stream operations:
+A command consistency boundary can span multiple streams, but the read API is
+still per-stream — read each `StreamId` and fold its events into the same
+state. Inside `execute()`, EventCore does this for every stream the command
+declares (via `#[stream]` fields and `#[derive(Command)]`) and merges them
+into a single reconstructed state before calling `handle()`.
 
-```rust
-let stream_ids = vec![
-    StreamId::from_static("order-123"),
-    StreamId::from_static("inventory-abc"),
-    StreamId::from_static("payment-xyz"),
-];
-
-let all_events = event_store
-    .read_streams(&stream_ids, ReadOptions::default())
-    .await?;
-
-// Events from all streams, ordered by EventId (time)
-```
-
-### Global Event Feed
-
-Read all events across all streams:
-
-```rust
-let all_events = event_store
-    .read_all_events(
-        ReadOptions::default()
-            .after(last_known_event_id)  // For pagination
-            .max_events(1000)
-    )
-    .await?;
-```
+For read models that need a cross-stream view, build a `Projector` and drive
+it with `run_projection`. The projection runner delivers events together with
+their global `StreamPosition`, in time order across streams, and checkpoints
+progress so it can resume. See
+[Projections](../02-getting-started/04-projections.md).
 
 ## Event Store Guarantees
 
 ### 1. Atomicity
 
-All events in a write operation succeed or fail together:
+All events in a single `append_events` call succeed or fail together — even
+when they span multiple streams. A command that withdraws from account A and
+deposits to account B emits both events from `handle()`, and `execute()`
+appends them in one atomic batch:
 
-```rust
-let events = vec![
-    EventToWrite { /* withdraw from account A */ },
-    EventToWrite { /* deposit to account B */ },
-];
-
-// Both events written atomically
-event_store.write_events(events).await?;
+```rust,ignore
+// handle() returns both events; execute() appends them atomically.
+fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+    Ok(vec![
+        BankEvent::MoneyWithdrawn { account_id: self.from.clone(), /* ... */ },
+        BankEvent::MoneyDeposited { account_id: self.to.clone(), /* ... */ },
+    ]
+    .into())
+}
 ```
+
+If any stream's version check fails, the entire batch is rolled back and no
+events are written.
 
 ### 2. Consistency
 
-Version checks prevent conflicting writes:
+Version checks prevent conflicting writes. Each append declares the
+`StreamVersion` it expects per stream; the store rejects the append if the
+current version differs:
 
-```rust
-// Two concurrent commands read version 5
-let command1_events = vec![/* ... */];
-let command2_events = vec![/* ... */];
-
-// First write succeeds
-event_store.write_events(command1_events).await?;  // OK
-
-// Second write fails - version conflict
-event_store.write_events(command2_events).await?;  // Error: Version conflict
+```rust,ignore
+// Two concurrent commands both read a stream at version 5.
+// The first command commits, advancing the stream to version 6.
+// The second command's append now fails:
+//   EventStoreError::VersionConflict { stream_id, expected: 5, actual: 6 }
+//
+// execute() catches this automatically, reloads state, and retries
+// according to the RetryPolicy.
 ```
 
 ### 3. Durability
 
-Events are persisted before returning success:
-
-```rust
-// After this returns, events are durable
-let result = event_store.write_events(events).await?;
-
-// Even if the process crashes, events are safe
-```
+Events are persisted before `append_events` returns success. Once the call
+completes, the events survive a process crash — the PostgreSQL and SQLite
+backends commit the transaction before returning.
 
 ### 4. Ordering
 
 Events maintain both stream order and global order:
 
-```rust
-// Stream order: version within a stream
-stream_events.events[0].version < stream_events.events[1].version
-
-// Global order: EventId across all streams
-all_events[0].id < all_events[1].id
-```
+- **Stream order** — within one stream, events are returned in
+  `StreamVersion` order (oldest to newest), exactly as appended.
+- **Global order** — across all streams, each event has a `StreamPosition`
+  (UUIDv7) assigned at append time. Positions are monotonically increasing
+  and globally sortable, so projectors can process events in time order and
+  resume from the last position they saw.
 
 ## Performance Optimization
 
 ### Batch Writing
 
-Write multiple events efficiently:
+A single command can emit many events, and they are all appended in one
+atomic `append_events` call — so the natural batching unit is the command. A
+command's `handle()` returns a `NewEvents` collection, and `execute()` appends
+the whole collection at once under the declared stream versions:
 
-```rust
-// Batch events for better performance
-let mut batch = Vec::with_capacity(1000);
+```rust,ignore
+fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+    let events: Vec<MyEvent> = self
+        .items
+        .iter()
+        .map(|item| MyEvent::ItemProcessed { /* ... */ })
+        .collect();
 
-for item in large_dataset {
-    batch.push(EventToWrite {
-        stream_id: compute_stream_id(&item),
-        payload: process_item(item),
-        metadata: None,
-        expected_version: ExpectedVersion::Any,
-    });
-
-    // Write in batches
-    if batch.len() >= 100 {
-        event_store.write_events(batch.drain(..).collect()).await?;
-    }
-}
-
-// Write remaining
-if !batch.is_empty() {
-    event_store.write_events(batch).await?;
+    Ok(events.into())
 }
 ```
+
+When you ingest a large external dataset, drive it as a sequence of command
+executions (one per logical unit of work) rather than hand-assembling a giant
+write. Each `execute()` call gets its own atomic append and optimistic
+concurrency check.
 
 ### Stream Partitioning
 
-Distribute load across streams:
+Distribute load across streams by choosing stream identities that spread
+writes out. `StreamId` is a validated domain type, so construct it with
+`try_new` (the only constructor — there is no `from_static`/`new`), handling
+the validation result:
 
-```rust
-// Instead of one hot stream
-let stream_id = StreamId::from_static("orders");
+```rust,ignore
+use eventcore::StreamId;
 
-// Partition by hash
-let stream_id = StreamId::from_static(&format!(
-    "orders-{}",
-    order_id.hash() % 16  // 16 partitions
-));
+// Instead of one hot stream...
+let stream_id = StreamId::try_new("orders")?;
+
+// ...partition by hash to avoid a single contended stream.
+let partition = order_id.hash() % 16; // 16 partitions
+let stream_id = StreamId::try_new(format!("orders-{partition}"))?;
 ```
 
-### Caching Strategies
+### Read-Side Caching
 
-Cache recent events for read performance:
+Hot-path reads belong in your read models, not in re-reading streams.
+Projections (the "Q" in CQRS) maintain denormalized, query-optimized views
+that you can cache freely without affecting write correctness — read models
+and write models are deliberately separate code paths.
 
-```rust
-struct CachedEventStore<ES: EventStore> {
-    inner: ES,
-    cache: Arc<RwLock<LruCache<StreamId, StreamEvents<ES::Event>>>>,
-}
-
-impl<ES: EventStore> CachedEventStore<ES> {
-    async fn read_stream_cached(
-        &self,
-        stream_id: &StreamId,
-        options: ReadOptions,
-    ) -> Result<StreamEvents<ES::Event>, ES::Error> {
-        // Check cache first
-        if options.is_from_start() {
-            if let Some(cached) = self.cache.read().await.get(stream_id) {
-                return Ok(cached.clone());
-            }
-        }
-
-        // Read from store
-        let events = self.inner.read_stream(stream_id, options).await?;
-
-        // Update cache
-        self.cache.write().await.insert(stream_id.clone(), events.clone());
-
-        Ok(events)
-    }
-}
-```
+Build a `Projector`, drive it with `run_projection`, and store its output in
+whatever cache or read database suits your queries. The projection runner
+checkpoints its `StreamPosition`, so it resumes incrementally rather than
+re-reading history. Do **not** cache inside the write path: command state is
+reconstructed fresh on every `execute()` so that optimistic concurrency stays
+correct. See
+[Projections](../02-getting-started/04-projections.md).
 
 ## Testing with Events
 
 ### Event Fixtures
 
-Create test events easily:
+Because events are plain domain types, test fixtures are just constructors —
+no framework wrappers required. These builders are **application-level test
+helpers** that live in your own test module:
 
-```rust
-// Helper builders live in your test module; implement what you need for your domain.
-
-fn create_account_opened_event() -> BankEvent {
+```rust,ignore
+// Application-level helper: build a domain event for a test.
+fn account_opened() -> BankEvent {
     BankEvent::AccountOpened {
-        account_id: StreamId::try_new("account-123").unwrap(),
-        owner: "Alice".to_string(),
-        initial_balance: 1000,
+        account_id: StreamId::try_new("account-123").expect("valid stream id"),
+        owner: Owner::try_new("Alice").expect("valid owner"),
+        initial_balance: Money::try_new(1000).expect("valid amount"),
     }
 }
 ```
 
-> **Note:** Events are plain enum variants — construct them directly without wrappers.
+> **Note:** Events are plain enum variants — construct them directly without
+> wrappers, and parse their fields into your domain types at the boundary.
 
-### Event Assertions
+### Behavioral Assertions
 
-Test event properties:
+Prefer testing behavior through the public API over inspecting internal event
+structure. The most reliable way to verify your command logic is to run it
+through `execute()` against an `InMemoryEventStore` and assert on the
+observable outcome:
 
-```rust
-// Custom assertions shown here can live in any test helper module.
+```rust,ignore
+// Application-level test: exercise the command through execute().
+#[tokio::test]
+async fn deposit_records_money_deposited() {
+    let store = InMemoryEventStore::new();
+    let account_id = StreamId::try_new("account-123").expect("valid stream id");
 
-#[test]
-fn test_events_are_ordered() {
-    let events = vec![/* ... */];
+    let response = execute(
+        &store,
+        Deposit { account_id: account_id.clone(), amount: 100 },
+        RetryPolicy::new(),
+    )
+    .await
+    .expect("deposit should succeed");
 
-    assert_events_ordered(&events);
-    assert_unique_event_ids(&events);
-    assert_stream_version_progression(&events, &stream_id);
+    // ExecutionResponse exposes how many attempts were needed.
+    assert_eq!(response.attempts(), 1);
+
+    // Read the stream back and assert on the events that were appended.
+    let events: Vec<BankEvent> =
+        collect_events(store.read_stream(account_id).await.expect("read")).await.expect("collect");
+    assert!(matches!(events.as_slice(), [BankEvent::MoneyDeposited { .. }]));
 }
 ```
+
+For richer scenarios, the `eventcore-testing` crate provides contract-test and
+chaos tooling for verifying backend behavior.
 
 ## Summary
 
 Events in EventCore are:
 
 - ✅ **Immutable records** of business facts
-- ✅ **Time-ordered** with UUIDv7 IDs
-- ✅ **Version-controlled** for consistency
-- ✅ **Atomically written** across streams
-- ✅ **Rich with metadata** for auditing
+- ✅ **Globally time-ordered** by a `StreamPosition` (UUIDv7) assigned at
+  append time
+- ✅ **Version-controlled** per stream via `StreamVersion` for optimistic
+  concurrency
+- ✅ **Atomically written** across streams by `execute()` / `append_events`
+- ✅ **Self-contained** — audit context lives in the event's own fields, owned
+  by your application
 
 Best practices:
 
 1. Design events around business concepts
-2. Include all necessary data in events
-3. Plan for event evolution
-4. Use version control for consistency
-5. Optimize storage with partitioning
+2. Include all necessary data (including audit context) in the event itself
+3. Plan for event evolution with serde defaults and new variants (ADR-0035)
+4. Let `execute()` handle versioning and atomic appends
+5. Distribute load with stream partitioning, and serve reads from projections
 
 Next, let's explore [State Reconstruction](./03-state-reconstruction.md) →

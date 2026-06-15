@@ -203,7 +203,7 @@ yet understand — it **cannot** fold the history to the fork point and therefor
 cannot reconcile correctly. The default posture is to **block reconcile loudly**
 with an upgrade-required error rather than attempt a partial or guessed fold.
 Silently skipping undeserializable events would fold an incomplete
-`ancestor_state` and produce a wrong resolution. General upcasting (ADR-0021
+`ancestor_state` and produce a wrong resolution. General upcasting (ADR-0035
 territory) is out of scope here; until it exists, the safe behavior is to refuse
 and tell the operator to upgrade.
 
@@ -335,7 +335,7 @@ resolution command would then make a domain decision on incorrect state. The
 resulting merge transaction would be confidently wrong and would itself diverge
 from the merge other (upgraded) replicas compute. Blocking loudly with an
 upgrade-required error is the only safe behavior until general upcasting
-(ADR-0021) exists.
+(ADR-0035) exists.
 
 ## Related Decisions
 

@@ -2,11 +2,47 @@
 
 Data protection is critical for EventCore applications since event stores contain the complete history of your system. This chapter covers comprehensive backup strategies, disaster recovery procedures, and data integrity verification.
 
+> **What EventCore provides vs. what your infrastructure owns.** EventCore
+> exposes **no backup, restore, export, or import API**. There is no
+> `BackupManager`, no `PointInTimeRecovery`, no `EventStoreBackup`, and the
+> `EventStore`/`EventReader` traits have no `list_all_streams`,
+> `read_events_since`, `clear_all`, or `write_events` methods. The only way to
+> append events is through a command's `handle()` persisted by
+> `eventcore::execute()`; the only way to read them is `read_stream` (per
+> stream, for state reconstruction) and `read_events` (the global read used by
+> projections).
+>
+> Because events are **immutable and append-only**, the right place to back up
+> an EventCore system is the **storage layer**, using the backup tooling that
+> ships with your backend:
+>
+> - **PostgreSQL** — `pg_dump`/`pg_restore`, continuous WAL archiving, and
+>   point-in-time recovery (PITR) via Barman, CloudNativePG, or your managed
+>   database's snapshot facility.
+> - **SQLite** — file copy / filesystem snapshot of the database file (use the
+>   SQLite Online Backup API or `VACUUM INTO` for a consistent copy while the
+>   DB is open).
+> - **File store (`eventcore-fs`)** — copy or snapshot the store directory.
+>
+> Everything in this chapter that looks like Rust orchestration
+> (`DisasterRecoveryOrchestrator`, health checks) is **application/operations
+> code you write around EventCore**, not an API the library exports. The
+> EventCore-specific health calls it uses (`ping()`, `migrate()`) are real and
+> documented below.
+
 ## Backup Strategies
+
+Append-only event stores are unusually friendly to backup: events are never
+mutated or deleted in normal operation, so a storage-layer snapshot plus
+continuous WAL archiving captures the entire system history with no
+application coordination required.
 
 ### PostgreSQL Backup Configuration
 
-EventCore's PostgreSQL event store requires specific backup considerations:
+The PostgreSQL backend stores events in ordinary tables, so any
+PostgreSQL-native backup approach works. The example below uses CloudNativePG
+with continuous WAL archiving to object storage, which gives you both periodic
+base backups and point-in-time recovery:
 
 ```yaml
 # PostgreSQL backup configuration using CloudNativePG
@@ -65,481 +101,69 @@ spec:
   method: barmanObjectStore
 ```
 
-### Event Store Backup Implementation
+### Manual `pg_dump` Backups
 
-```rust
-use tokio::fs::File;
-use tokio::io::{AsyncWriteExt, BufWriter};
-use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
-use uuid::Uuid;
+For environments without an operator, a scheduled `pg_dump` of the EventCore
+database is sufficient for full backups. Because events are append-only, a
+consistent dump captures a complete, replayable history:
 
-#[derive(Debug, Clone)]
-pub struct BackupManager {
-    event_store: Arc<dyn EventStore>,
-    storage: Arc<dyn BackupStorage>,
-    config: BackupConfig,
-}
+```bash
+# Full logical backup of the EventCore database
+pg_dump \
+  --format=custom \
+  --compress=9 \
+  --file="eventcore-$(date +%Y%m%dT%H%M%S).dump" \
+  "$DATABASE_URL"
 
-#[derive(Debug, Clone)]
-pub struct BackupConfig {
-    pub backup_format: BackupFormat,
-    pub compression: CompressionType,
-    pub encryption_enabled: bool,
-    pub chunk_size: usize,
-    pub retention_days: u32,
-    pub verify_after_backup: bool,
-}
-
-#[derive(Debug, Clone)]
-pub enum BackupFormat {
-    JsonLines,
-    MessagePack,
-    Custom,
-}
-
-#[derive(Debug, Clone)]
-pub enum CompressionType {
-    None,
-    Gzip,
-    Zstd,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BackupMetadata {
-    pub backup_id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub format: BackupFormat,
-    pub compression: CompressionType,
-    pub total_events: u64,
-    pub total_streams: u64,
-    pub size_bytes: u64,
-    pub checksum: String,
-    pub event_range: EventRange,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EventRange {
-    pub earliest_event: DateTime<Utc>,
-    pub latest_event: DateTime<Utc>,
-    pub earliest_version: EventVersion,
-    pub latest_version: EventVersion,
-}
-
-impl BackupManager {
-    pub async fn create_full_backup(&self) -> Result<BackupMetadata, BackupError> {
-        let backup_id = Uuid::new_v4();
-        let start_time = Utc::now();
-
-        tracing::info!(backup_id = %backup_id, "Starting full backup");
-
-        // Create backup metadata
-        let mut metadata = BackupMetadata {
-            backup_id,
-            created_at: start_time,
-            format: self.config.backup_format.clone(),
-            compression: self.config.compression.clone(),
-            total_events: 0,
-            total_streams: 0,
-            size_bytes: 0,
-            checksum: String::new(),
-            event_range: EventRange {
-                earliest_event: start_time,
-                latest_event: start_time,
-                earliest_version: EventVersion::initial(),
-                latest_version: EventVersion::initial(),
-            },
-        };
-
-        // Get all streams
-        let streams = self.event_store.list_all_streams().await?;
-        metadata.total_streams = streams.len() as u64;
-
-        // Create backup writer
-        let backup_path = format!("full-backup-{}.eventcore", backup_id);
-        let mut writer = BackupWriter::new(
-            &backup_path,
-            self.config.compression.clone(),
-            self.config.encryption_enabled,
-        ).await?;
-
-        // Write backup header
-        writer.write_header(&metadata).await?;
-
-        // Backup each stream
-        for stream_id in streams {
-            let events = self.backup_stream(&stream_id, &mut writer).await?;
-            metadata.total_events += events;
-
-            if metadata.total_events % 10000 == 0 {
-                tracing::info!(
-                    backup_id = %backup_id,
-                    events_backed_up = metadata.total_events,
-                    "Backup progress"
-                );
-            }
-        }
-
-        // Calculate checksums and finalize
-        metadata.size_bytes = writer.finalize().await?;
-        metadata.checksum = writer.calculate_checksum().await?;
-
-        // Store backup metadata
-        self.storage.store_backup(&backup_path, &metadata).await?;
-
-        // Verify backup if configured
-        if self.config.verify_after_backup {
-            self.verify_backup(&backup_id).await?;
-        }
-
-        let duration = Utc::now().signed_duration_since(start_time);
-        tracing::info!(
-            backup_id = %backup_id,
-            duration_seconds = duration.num_seconds(),
-            total_events = metadata.total_events,
-            size_mb = metadata.size_bytes / (1024 * 1024),
-            "Backup completed successfully"
-        );
-
-        Ok(metadata)
-    }
-
-    pub async fn create_incremental_backup(
-        &self,
-        since: DateTime<Utc>,
-    ) -> Result<BackupMetadata, BackupError> {
-        let backup_id = Uuid::new_v4();
-        let start_time = Utc::now();
-
-        tracing::info!(
-            backup_id = %backup_id,
-            since = %since,
-            "Starting incremental backup"
-        );
-
-        // Query events since timestamp
-        let events = self.event_store.read_events_since(since).await?;
-
-        let mut metadata = BackupMetadata {
-            backup_id,
-            created_at: start_time,
-            format: self.config.backup_format.clone(),
-            compression: self.config.compression.clone(),
-            total_events: events.len() as u64,
-            total_streams: 0, // Will be calculated
-            size_bytes: 0,
-            checksum: String::new(),
-            event_range: self.calculate_event_range(&events),
-        };
-
-        // Create backup writer
-        let backup_path = format!("incremental-backup-{}.eventcore", backup_id);
-        let mut writer = BackupWriter::new(
-            &backup_path,
-            self.config.compression.clone(),
-            self.config.encryption_enabled,
-        ).await?;
-
-        // Write incremental backup
-        writer.write_header(&metadata).await?;
-
-        let mut unique_streams = std::collections::HashSet::new();
-        for event in events {
-            writer.write_event(&event).await?;
-            unique_streams.insert(event.stream_id.clone());
-        }
-
-        metadata.total_streams = unique_streams.len() as u64;
-        metadata.size_bytes = writer.finalize().await?;
-        metadata.checksum = writer.calculate_checksum().await?;
-
-        self.storage.store_backup(&backup_path, &metadata).await?;
-
-        tracing::info!(
-            backup_id = %backup_id,
-            total_events = metadata.total_events,
-            total_streams = metadata.total_streams,
-            "Incremental backup completed"
-        );
-
-        Ok(metadata)
-    }
-
-    async fn backup_stream(
-        &self,
-        stream_id: &StreamId,
-        writer: &mut BackupWriter,
-    ) -> Result<u64, BackupError> {
-        let mut event_count = 0;
-        let mut from_version = EventVersion::initial();
-        let batch_size = self.config.chunk_size;
-
-        loop {
-            let options = ReadOptions::default()
-                .from_version(from_version)
-                .limit(batch_size);
-
-            let stream_events = self.event_store.read_stream(stream_id, options).await?;
-
-            if stream_events.events.is_empty() {
-                break;
-            }
-
-            for event in &stream_events.events {
-                writer.write_event(event).await?;
-                event_count += 1;
-            }
-
-            from_version = EventVersion::from(
-                stream_events.events.last().unwrap().version.as_u64() + 1
-            );
-        }
-
-        Ok(event_count)
-    }
-
-    fn calculate_event_range(&self, events: &[BackupEvent]) -> EventRange {
-        if events.is_empty() {
-            let now = Utc::now();
-            return EventRange {
-                earliest_event: now,
-                latest_event: now,
-                earliest_version: EventVersion::initial(),
-                latest_version: EventVersion::initial(),
-            };
-        }
-
-        let earliest = events.iter().min_by_key(|e| e.occurred_at).unwrap();
-        let latest = events.iter().max_by_key(|e| e.occurred_at).unwrap();
-
-        EventRange {
-            earliest_event: earliest.occurred_at,
-            latest_event: latest.occurred_at,
-            earliest_version: earliest.version,
-            latest_version: latest.version,
-        }
-    }
-}
-
-struct BackupWriter {
-    file: BufWriter<File>,
-    path: String,
-    compression: CompressionType,
-    encrypted: bool,
-    bytes_written: u64,
-}
-
-impl BackupWriter {
-    async fn new(
-        path: &str,
-        compression: CompressionType,
-        encrypted: bool,
-    ) -> Result<Self, BackupError> {
-        let file = File::create(path).await?;
-        let file = BufWriter::new(file);
-
-        Ok(Self {
-            file,
-            path: path.to_string(),
-            compression,
-            encrypted,
-            bytes_written: 0,
-        })
-    }
-
-    async fn write_header(&mut self, metadata: &BackupMetadata) -> Result<(), BackupError> {
-        let header = serde_json::to_string(metadata)?;
-        let header_line = format!("EVENTCORE_BACKUP_HEADER:{}\n", header);
-
-        self.file.write_all(header_line.as_bytes()).await?;
-        self.bytes_written += header_line.len() as u64;
-
-        Ok(())
-    }
-
-    async fn write_event(&mut self, event: &BackupEvent) -> Result<(), BackupError> {
-        let event_line = match self.compression {
-            CompressionType::None => {
-                let json = serde_json::to_string(event)?;
-                format!("{}\n", json)
-            }
-            CompressionType::Gzip => {
-                // Implement gzip compression
-                let json = serde_json::to_string(event)?;
-                format!("{}\n", json) // Simplified for example
-            }
-            CompressionType::Zstd => {
-                // Implement zstd compression
-                let json = serde_json::to_string(event)?;
-                format!("{}\n", json) // Simplified for example
-            }
-        };
-
-        self.file.write_all(event_line.as_bytes()).await?;
-        self.bytes_written += event_line.len() as u64;
-
-        Ok(())
-    }
-
-    async fn finalize(&mut self) -> Result<u64, BackupError> {
-        self.file.flush().await?;
-        Ok(self.bytes_written)
-    }
-
-    async fn calculate_checksum(&self) -> Result<String, BackupError> {
-        // Calculate SHA-256 checksum of the backup file
-        use sha2::{Sha256, Digest};
-        use tokio::fs::File;
-        use tokio::io::AsyncReadExt;
-
-        let mut file = File::open(&self.path).await?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0; 8192];
-
-        loop {
-            let bytes_read = file.read(&mut buffer).await?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-
-        Ok(format!("{:x}", hasher.finalize()))
-    }
-}
+# Restore into a fresh database
+createdb eventcore_restored
+pg_restore \
+  --dbname="postgresql://.../eventcore_restored" \
+  --no-owner \
+  eventcore-20260101T020000.dump
 ```
 
-### Point-in-Time Recovery
+For point-in-time recovery between base backups, enable WAL archiving
+(`archive_mode = on`, `archive_command = '...'`) and use standard PostgreSQL
+PITR (`recovery_target_time`). This is the same PITR mechanism CloudNativePG
+automates above — there is no EventCore-specific recovery step.
 
-```rust
-#[derive(Debug, Clone)]
-pub struct PointInTimeRecovery {
-    backup_manager: BackupManager,
-    event_store: Arc<dyn EventStore>,
-}
+### SQLite Backup Configuration
 
-impl PointInTimeRecovery {
-    pub async fn restore_to_point_in_time(
-        &self,
-        target_time: DateTime<Utc>,
-    ) -> Result<RecoveryResult, RecoveryError> {
-        tracing::info!(target_time = %target_time, "Starting point-in-time recovery");
+The SQLite backend (`eventcore-sqlite`) stores events in a single database
+file. Back it up the way you back up any SQLite database:
 
-        // Find the best backup to start from
-        let base_backup = self.find_best_base_backup(target_time).await?;
+```bash
+# Consistent copy while the database may be in use:
+sqlite3 eventcore.db "VACUUM INTO 'eventcore-backup.db'"
 
-        // Restore from base backup
-        self.restore_from_backup(&base_backup.backup_id).await?;
-
-        // Apply incremental backups up to the target time
-        let incremental_backups = self.find_incremental_backups_until(
-            base_backup.created_at,
-            target_time,
-        ).await?;
-
-        for backup in incremental_backups {
-            self.apply_incremental_backup(&backup.backup_id, Some(target_time)).await?;
-        }
-
-        // Apply WAL entries up to the exact target time
-        self.apply_wal_entries_until(target_time).await?;
-
-        // Verify recovery
-        let recovery_result = self.verify_recovery(target_time).await?;
-
-        tracing::info!(
-            target_time = %target_time,
-            events_restored = recovery_result.events_restored,
-            streams_restored = recovery_result.streams_restored,
-            "Point-in-time recovery completed"
-        );
-
-        Ok(recovery_result)
-    }
-
-    async fn find_best_base_backup(
-        &self,
-        target_time: DateTime<Utc>,
-    ) -> Result<BackupMetadata, RecoveryError> {
-        let backups = self.backup_manager.list_backups().await?;
-
-        // Find the latest full backup before the target time
-        let base_backup = backups
-            .iter()
-            .filter(|b| b.created_at <= target_time)
-            .filter(|b| matches!(b.format, BackupFormat::JsonLines)) // Full backup indicator
-            .max_by_key(|b| b.created_at)
-            .ok_or(RecoveryError::NoSuitableBackup)?;
-
-        Ok(base_backup.clone())
-    }
-
-    async fn restore_from_backup(&self, backup_id: &Uuid) -> Result<(), RecoveryError> {
-        tracing::info!(backup_id = %backup_id, "Restoring from base backup");
-
-        // Clear the event store
-        self.event_store.clear_all().await?;
-
-        // Read backup file
-        let backup_reader = BackupReader::new(backup_id).await?;
-        let metadata = backup_reader.read_metadata().await?;
-
-        tracing::info!(
-            backup_id = %backup_id,
-            total_events = metadata.total_events,
-            "Reading backup events"
-        );
-
-        // Restore events in batches
-        let batch_size = 1000;
-        let mut events_restored = 0;
-
-        while let Some(batch) = backup_reader.read_events_batch(batch_size).await? {
-            self.event_store.write_events(batch).await?;
-            events_restored += batch_size;
-
-            if events_restored % 10000 == 0 {
-                tracing::info!(
-                    events_restored = events_restored,
-                    "Restore progress"
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn apply_wal_entries_until(
-        &self,
-        target_time: DateTime<Utc>,
-    ) -> Result<(), RecoveryError> {
-        // Apply WAL (Write-Ahead Log) entries from PostgreSQL
-        // This provides exact point-in-time recovery
-
-        let wal_entries = self.read_wal_entries_until(target_time).await?;
-
-        for entry in wal_entries {
-            if entry.timestamp <= target_time {
-                self.apply_wal_entry(entry).await?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RecoveryResult {
-    pub events_restored: u64,
-    pub streams_restored: u64,
-    pub recovery_time: DateTime<Utc>,
-    pub data_integrity_verified: bool,
-}
+# Or, when the application is stopped, a plain file copy / filesystem snapshot
+cp eventcore.db eventcore-backup-$(date +%Y%m%d).db
 ```
+
+At-rest encryption for SQLite is a **storage concern**, not something the
+application does per event. `eventcore-sqlite` offers an optional, non-default
+`encryption` feature backed by SQLCipher
+(`encryption = ["rusqlite/bundled-sqlcipher-vendored-openssl"]`); enable it and
+supply the key at open time if you need an encrypted database file. Back up the
+encrypted file the same way — the ciphertext is what you copy.
+
+### File Store Backup Configuration
+
+The file backend (`eventcore-fs`), opened with `FileEventStore::open(path)`,
+stores events under a directory tree. Back it up with a directory copy or a
+filesystem-level snapshot (LVM, ZFS, btrfs, or a cloud volume snapshot). As
+with the other backends, immutability means a snapshot taken at any moment is a
+consistent, replayable history.
 
 ## Disaster Recovery
 
 ### Multi-Region Backup Strategy
+
+Geographic distribution of backups is an infrastructure concern, configured
+where your backups live (object storage replication, cross-region snapshot
+copy). The following illustrates a policy expressed as a ConfigMap; it does not
+involve any EventCore API:
 
 ```yaml
 # Multi-region backup configuration
@@ -576,15 +200,21 @@ data:
       retention: "7y"
 ```
 
-### Automated Disaster Recovery
+### Disaster Recovery Orchestration (application/operations code)
+
+The recovery _decisions_ — assess the failure, pick a strategy, fail over to a
+replica region, update DNS — are operational logic you own. EventCore's only
+role is providing the health signals you check against a store. The orchestrator
+below is **your code**; the only EventCore calls it makes are the real backend
+health methods (`PostgresEventStore::ping()` and `migrate()`):
 
 ```rust
-#[derive(Debug, Clone)]
+// Application/operations code — NOT an EventCore API.
+#[derive(Clone)]
 pub struct DisasterRecoveryOrchestrator {
     primary_region: String,
     failover_regions: Vec<String>,
-    backup_manager: BackupManager,
-    health_checker: HealthChecker,
+    // Your infrastructure-control clients (DNS, autoscaling, alerting) go here.
 }
 
 impl DisasterRecoveryOrchestrator {
@@ -592,10 +222,7 @@ impl DisasterRecoveryOrchestrator {
         &self,
         trigger: DisasterTrigger,
     ) -> Result<RecoveryOutcome, DisasterRecoveryError> {
-        tracing::error!(
-            trigger = ?trigger,
-            "Disaster recovery triggered"
-        );
+        tracing::error!(trigger = ?trigger, "Disaster recovery triggered");
 
         // Assess the situation
         let assessment = self.assess_disaster_scope().await?;
@@ -605,89 +232,97 @@ impl DisasterRecoveryOrchestrator {
 
         // Execute recovery
         match strategy {
-            RecoveryStrategy::LocalRestore => {
-                self.execute_local_restore().await
-            }
+            RecoveryStrategy::LocalRestore => self.execute_local_restore().await,
             RecoveryStrategy::RegionalFailover { target_region } => {
                 self.execute_regional_failover(&target_region).await
             }
-            RecoveryStrategy::FullRebuild => {
-                self.execute_full_rebuild().await
-            }
+            RecoveryStrategy::FullRebuild => self.execute_full_rebuild().await,
         }
     }
 
     async fn assess_disaster_scope(&self) -> Result<DisasterAssessment, DisasterRecoveryError> {
         let mut assessment = DisasterAssessment::default();
 
-        // Check primary database
-        assessment.primary_db_accessible = self.health_checker
-            .check_database_connectivity(&self.primary_region)
-            .await
-            .is_ok();
+        // Check primary database health. PostgresEventStore::ping() runs a
+        // trivial query and PANICS if the database is unreachable — it returns
+        // (), not a Result. Catch the panic (or wrap construction) to turn an
+        // unreachable database into a boolean signal.
+        assessment.primary_db_accessible =
+            self.check_store_health(&self.primary_region).await;
 
-        // Check backup availability
-        assessment.backup_accessible = self.backup_manager
-            .verify_backup_accessibility()
-            .await
-            .is_ok();
-
-        // Check replica regions
+        // Check replica regions the same way.
         for region in &self.failover_regions {
-            let accessible = self.health_checker
-                .check_database_connectivity(region)
-                .await
-                .is_ok();
+            let accessible = self.check_store_health(region).await;
             assessment.replica_regions.insert(region.clone(), accessible);
         }
 
-        // Estimate data loss
+        // Estimate data loss from your backup/replication lag metrics.
         assessment.estimated_data_loss = self.calculate_potential_data_loss().await?;
 
         Ok(assessment)
+    }
+
+    /// Probe a region's PostgreSQL store. `ping()` returns () and panics on
+    /// failure, so we treat a successful return as healthy and a caught panic
+    /// (or a connection error during construction) as unhealthy.
+    async fn check_store_health(&self, region: &str) -> bool {
+        let connection_string = self.store_url_for_region(region);
+        match eventcore_postgres::PostgresEventStore::new(connection_string).await {
+            Ok(store) => {
+                // ping() panics on failure; isolate it so a dead region does
+                // not take down the orchestrator.
+                let probe = tokio::task::spawn(async move { store.ping().await });
+                probe.await.is_ok()
+            }
+            Err(_) => false,
+        }
     }
 
     async fn execute_regional_failover(
         &self,
         target_region: &str,
     ) -> Result<RecoveryOutcome, DisasterRecoveryError> {
-        tracing::info!(
-            target_region = target_region,
-            "Executing regional failover"
-        );
+        tracing::info!(target_region, "Executing regional failover");
 
-        // 1. Promote replica in target region
+        // 1. Promote the replica's database in the target region (storage-layer
+        //    operation: CloudNativePG promotion, managed-DB failover, etc.).
         self.promote_replica(target_region).await?;
 
-        // 2. Update DNS to point to new region
+        // 2. Run EventCore's schema migration against the promoted database so
+        //    the schema is current before serving traffic. migrate() returns ()
+        //    and panics on failure.
+        let store = eventcore_postgres::PostgresEventStore::new(
+            self.store_url_for_region(target_region),
+        )
+        .await
+        .map_err(DisasterRecoveryError::StoreUnavailable)?;
+        store.migrate().await;
+
+        // 3. Update DNS to point at the new region.
         self.update_dns_routing(target_region).await?;
 
-        // 3. Scale up resources in target region
+        // 4. Scale up resources in the target region.
         self.scale_up_target_region(target_region).await?;
 
-        // 4. Verify system health
+        // 5. Verify and notify.
         let health_check = self.verify_system_health(target_region).await?;
-
-        // 5. Notify stakeholders
         self.notify_failover_completion(target_region, &health_check).await?;
 
         Ok(RecoveryOutcome {
             strategy_used: RecoveryStrategy::RegionalFailover {
                 target_region: target_region.to_string(),
             },
-            recovery_time: Utc::now(),
             data_loss_minutes: 0, // Assuming near-real-time replication
             systems_recovered: health_check.systems_operational,
         })
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DisasterAssessment {
     pub primary_db_accessible: bool,
-    pub backup_accessible: bool,
-    pub replica_regions: HashMap<String, bool>,
-    pub estimated_data_loss: Duration,
+    pub replica_regions: std::collections::HashMap<String, bool>,
+    pub estimated_data_loss: std::time::Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -707,482 +342,119 @@ pub enum DisasterTrigger {
 }
 ```
 
+The key point: failover _restores the storage layer_ (a promoted replica or a
+restored `pg_dump`/snapshot), and EventCore picks up exactly where the events
+leave off. There is no event-level restore loop to write, because there is no
+event-level backup API to begin with.
+
 ## Data Integrity Verification
 
-### Backup Verification
+EventCore guarantees integrity at write time: `append_events` performs atomic,
+multi-stream writes under optimistic concurrency control, so a stream's
+versions are gap-free and monotonically increasing by construction
+(`StreamVersion`), and global ordering is captured by `StreamPosition` (a
+UUIDv7). Events are immutable once written. There is no application-level
+"event corruption monitor" API, and EventCore does not expose a way to mutate
+or re-checksum stored events.
+
+### Verify Backups at the Storage Layer
+
+Verify the integrity of a backup the way you verify any database backup —
+without an EventCore-specific tool:
+
+- **PostgreSQL.** Restore the dump into a throwaway database
+  (`pg_restore`), then run consistency checks. `pg_restore --list` and
+  `pg_dump`'s own custom-format checksums catch a truncated or corrupt archive.
+  WAL archives are validated by PITR replay.
+- **SQLite.** Run `PRAGMA integrity_check;` (or `PRAGMA quick_check;`) against
+  the backup file. A clean result means the file is structurally sound.
+- **File store.** Verify your snapshot/copy with the filesystem's checksum or
+  the object store's ETag/MD5 on upload.
+
+### Verify Replayability with EventCore
+
+The strongest end-to-end check is to confirm a restored store actually replays.
+Restore into a scratch database, point a backend at it, and rebuild a
+projection with the real entry point:
 
 ```rust
-#[derive(Debug, Clone)]
-pub struct BackupVerifier {
-    event_store: Arc<dyn EventStore>,
-    backup_storage: Arc<dyn BackupStorage>,
-}
+// Restore the storage layer first (pg_restore / file copy), then:
+let store = eventcore_postgres::PostgresEventStore::new(restored_db_url).await?;
+store.migrate().await; // returns (); panics on failure
 
-impl BackupVerifier {
-    pub async fn verify_backup_integrity(
-        &self,
-        backup_id: &Uuid,
-    ) -> Result<VerificationResult, VerificationError> {
-        tracing::info!(backup_id = %backup_id, "Starting backup verification");
-
-        let mut result = VerificationResult::default();
-
-        // Verify checksum
-        result.checksum_valid = self.verify_checksum(backup_id).await?;
-
-        // Verify metadata consistency
-        result.metadata_consistent = self.verify_metadata(backup_id).await?;
-
-        // Verify event integrity
-        result.events_valid = self.verify_events(backup_id).await?;
-
-        // Verify completeness (if verifying against live system)
-        if let Ok(completeness) = self.verify_completeness(backup_id).await {
-            result.completeness_verified = true;
-            result.missing_events = completeness.missing_events;
-        }
-
-        result.verification_time = Utc::now();
-        result.overall_valid = result.checksum_valid &&
-            result.metadata_consistent &&
-            result.events_valid &&
-            result.missing_events == 0;
-
-        if result.overall_valid {
-            tracing::info!(backup_id = %backup_id, "Backup verification passed");
-        } else {
-            tracing::error!(
-                backup_id = %backup_id,
-                result = ?result,
-                "Backup verification failed"
-            );
-        }
-
-        Ok(result)
-    }
-
-    async fn verify_checksum(&self, backup_id: &Uuid) -> Result<bool, VerificationError> {
-        let backup_metadata = self.backup_storage.get_metadata(backup_id).await?;
-        let calculated_checksum = self.calculate_backup_checksum(backup_id).await?;
-
-        Ok(backup_metadata.checksum == calculated_checksum)
-    }
-
-    async fn verify_events(&self, backup_id: &Uuid) -> Result<bool, VerificationError> {
-        let backup_reader = BackupReader::new(backup_id).await?;
-        let mut events_valid = true;
-        let mut event_count = 0;
-
-        while let Some(event) = backup_reader.read_next_event().await? {
-            // Verify event structure
-            if !self.is_event_structurally_valid(&event) {
-                tracing::error!(
-                    backup_id = %backup_id,
-                    event_id = %event.id,
-                    "Invalid event structure found"
-                );
-                events_valid = false;
-                break;
-            }
-
-            // Verify event ordering (within stream)
-            if !self.is_event_ordering_valid(&event) {
-                tracing::error!(
-                    backup_id = %backup_id,
-                    event_id = %event.id,
-                    "Invalid event ordering found"
-                );
-                events_valid = false;
-                break;
-            }
-
-            event_count += 1;
-
-            if event_count % 10000 == 0 {
-                tracing::info!(
-                    backup_id = %backup_id,
-                    events_verified = event_count,
-                    "Verification progress"
-                );
-            }
-        }
-
-        Ok(events_valid)
-    }
-
-    fn is_event_structurally_valid(&self, event: &BackupEvent) -> bool {
-        // Verify required fields
-        if event.id.is_nil() || event.stream_id.as_ref().is_empty() {
-            return false;
-        }
-
-        // Verify event ordering within stream
-        if event.version.as_u64() == 0 {
-            return false;
-        }
-
-        // Verify timestamp is reasonable
-        let now = Utc::now();
-        if event.occurred_at > now || event.occurred_at < (now - chrono::Duration::days(3650)) {
-            return false;
-        }
-
-        true
-    }
-
-    fn is_event_ordering_valid(&self, event: &BackupEvent) -> bool {
-        // This would need to track ordering within streams
-        // Simplified implementation for example
-        true
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct VerificationResult {
-    pub checksum_valid: bool,
-    pub metadata_consistent: bool,
-    pub events_valid: bool,
-    pub completeness_verified: bool,
-    pub missing_events: u64,
-    pub verification_time: DateTime<Utc>,
-    pub overall_valid: bool,
-}
+// Rebuild a read model from the restored events via the canonical entry point.
+// run_projection borrows the backend; execute()/run_projection() are the only
+// ways events enter or leave the store.
+eventcore::run_projection(my_projector, &store, ProjectionConfig::default()).await?;
 ```
 
-### Continuous Integrity Monitoring
+If the projection rebuilds to the expected state, the restored events are
+intact and replayable. This exercises the same `read_events` path the
+application uses in production, which is a far stronger guarantee than checking
+individual rows.
 
-```rust
-#[derive(Debug, Clone)]
-pub struct IntegrityMonitor {
-    event_store: Arc<dyn EventStore>,
-    monitoring_config: IntegrityMonitoringConfig,
-}
-
-#[derive(Debug, Clone)]
-pub struct IntegrityMonitoringConfig {
-    pub check_interval: Duration,
-    pub sample_percentage: f64,
-    pub alert_on_corruption: bool,
-    pub auto_repair: bool,
-}
-
-impl IntegrityMonitor {
-    pub async fn start_monitoring(&self) -> Result<(), MonitoringError> {
-        tracing::info!("Starting continuous integrity monitoring");
-
-        let mut interval = tokio::time::interval(self.monitoring_config.check_interval);
-
-        loop {
-            interval.tick().await;
-
-            match self.perform_integrity_check().await {
-                Ok(report) => {
-                    if !report.integrity_ok {
-                        tracing::error!(
-                            corruption_count = report.corrupted_events,
-                            "Data integrity issues detected"
-                        );
-
-                        if self.monitoring_config.alert_on_corruption {
-                            self.send_corruption_alert(&report).await;
-                        }
-
-                        if self.monitoring_config.auto_repair {
-                            self.attempt_auto_repair(&report).await;
-                        }
-                    } else {
-                        tracing::debug!("Integrity check passed");
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Integrity check failed");
-                }
-            }
-        }
-    }
-
-    async fn perform_integrity_check(&self) -> Result<IntegrityReport, MonitoringError> {
-        let start_time = Utc::now();
-        let mut report = IntegrityReport::default();
-
-        // Sample events for checking
-        let sample_events = self.sample_events().await?;
-        report.events_checked = sample_events.len() as u64;
-
-        for event in sample_events {
-            // Check event integrity
-            let integrity_check = self.check_event_integrity(&event).await?;
-
-            if !integrity_check.valid {
-                report.corrupted_events += 1;
-                report.corruption_details.push(integrity_check);
-            }
-        }
-
-        report.check_time = Utc::now();
-        report.check_duration = report.check_time.signed_duration_since(start_time);
-        report.integrity_ok = report.corrupted_events == 0;
-
-        Ok(report)
-    }
-
-    async fn sample_events(&self) -> Result<Vec<BackupEvent>, MonitoringError> {
-        // Sample a percentage of events for integrity checking
-        let sample_size = ((self.get_total_event_count().await? as f64)
-            * self.monitoring_config.sample_percentage / 100.0) as usize;
-
-        // Use reservoir sampling or similar technique
-        self.event_store.sample_events(sample_size).await
-            .map_err(MonitoringError::EventStoreError)
-    }
-
-    async fn check_event_integrity(&self, event: &BackupEvent) -> Result<EventIntegrityCheck, MonitoringError> {
-        let mut check = EventIntegrityCheck {
-            event_id: event.id,
-            stream_id: event.stream_id.clone(),
-            valid: true,
-            issues: Vec::new(),
-        };
-
-        // Check payload can be deserialized
-        if let Err(_) = serde_json::to_value(&event) {
-            check.valid = false;
-            check.issues.push("Payload deserialization failed".to_string());
-        }
-
-        // Check metadata is valid
-        if event.metadata.is_empty() {
-            check.issues.push("Missing metadata".to_string());
-        }
-
-        // Check event ordering within stream
-        if let Err(_) = self.verify_event_ordering(event).await {
-            check.valid = false;
-            check.issues.push("Event ordering violation".to_string());
-        }
-
-        Ok(check)
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct IntegrityReport {
-    pub check_time: DateTime<Utc>,
-    pub check_duration: chrono::Duration,
-    pub events_checked: u64,
-    pub corrupted_events: u64,
-    pub integrity_ok: bool,
-    pub corruption_details: Vec<EventIntegrityCheck>,
-}
-
-#[derive(Debug)]
-pub struct EventIntegrityCheck {
-    pub event_id: EventId,
-    pub stream_id: StreamId,
-    pub valid: bool,
-    pub issues: Vec<String>,
-}
-```
+> **Recovering individual streams.** To inspect a single stream after a
+> restore, read it back with `EventStore::read_stream::<MyEvent>(stream_id)`,
+> where `stream_id` is built with `StreamId::try_new(...)`. This is a read for
+> verification only — you cannot re-append those events directly. New events
+> are produced exclusively by a command's `handle()` and persisted by
+> `eventcore::execute()`.
 
 ## Backup Testing and Validation
 
-### Automated Backup Testing
+Test recovery, not just backup creation. The most valuable rehearsal is a
+full restore-and-replay drill, run on a schedule, that exercises the real
+storage tooling and the real EventCore replay path:
 
-```rust
-#[derive(Debug, Clone)]
-pub struct BackupTestSuite {
-    backup_manager: BackupManager,
-    test_event_store: Arc<dyn EventStore>,
-    test_config: BackupTestConfig,
-}
+1. **Restore drill.** Restore the latest base backup (and replay WAL to a
+   target time, for PostgreSQL PITR) into an isolated environment using
+   `pg_restore` / file copy. Confirm the restore completes without error.
+2. **Schema check.** Run `store.migrate()` against the restored database and
+   confirm it returns (does not panic), proving the schema matches the code.
+3. **Replay check.** Run `eventcore::run_projection(...)` against the restored
+   store and assert the rebuilt read model matches expectations. This is the
+   acceptance test for "the backup is usable."
+4. **Cross-region check.** Periodically run the same drill against a backup
+   copied to a secondary region to validate cross-region recoverability.
 
-#[derive(Debug, Clone)]
-pub struct BackupTestConfig {
-    pub test_frequency: Duration,
-    pub full_restore_test_frequency: Duration,
-    pub sample_restore_percentage: f64,
-    pub cleanup_test_data: bool,
-}
-
-impl BackupTestSuite {
-    pub async fn run_comprehensive_backup_tests(&self) -> Result<TestResults, TestError> {
-        tracing::info!("Starting comprehensive backup tests");
-
-        let mut results = TestResults::default();
-
-        // Test 1: Backup creation
-        results.backup_creation = self.test_backup_creation().await?;
-
-        // Test 2: Backup verification
-        results.backup_verification = self.test_backup_verification().await?;
-
-        // Test 3: Partial restore
-        results.partial_restore = self.test_partial_restore().await?;
-
-        // Test 4: Full restore (if scheduled)
-        if self.should_run_full_restore_test().await? {
-            results.full_restore = Some(self.test_full_restore().await?);
-        }
-
-        // Test 5: Point-in-time recovery
-        results.point_in_time_recovery = self.test_point_in_time_recovery().await?;
-
-        // Test 6: Cross-region restore
-        results.cross_region_restore = self.test_cross_region_restore().await?;
-
-        results.overall_success = results.all_tests_passed();
-        results.test_time = Utc::now();
-
-        if results.overall_success {
-            tracing::info!("All backup tests passed");
-        } else {
-            tracing::error!(results = ?results, "Some backup tests failed");
-        }
-
-        Ok(results)
-    }
-
-    async fn test_backup_creation(&self) -> Result<TestResult, TestError> {
-        let start_time = Utc::now();
-
-        // Create test data
-        let test_events = self.create_test_events(1000).await?;
-        self.write_test_events(&test_events).await?;
-
-        // Create backup
-        let backup_result = self.backup_manager.create_full_backup().await;
-
-        let duration = Utc::now().signed_duration_since(start_time);
-
-        match backup_result {
-            Ok(metadata) => {
-                Ok(TestResult {
-                    test_name: "backup_creation".to_string(),
-                    success: true,
-                    duration,
-                    details: format!("Backup created: {}", metadata.backup_id),
-                    error: None,
-                })
-            }
-            Err(e) => {
-                Ok(TestResult {
-                    test_name: "backup_creation".to_string(),
-                    success: false,
-                    duration,
-                    details: "Backup creation failed".to_string(),
-                    error: Some(e.to_string()),
-                })
-            }
-        }
-    }
-
-    async fn test_full_restore(&self) -> Result<TestResult, TestError> {
-        let start_time = Utc::now();
-
-        // Get latest backup
-        let latest_backup = self.backup_manager.get_latest_backup().await?;
-
-        // Create clean test environment
-        let test_store = self.create_clean_test_store().await?;
-
-        // Perform restore
-        let restore_result = self.restore_backup_to_store(
-            &latest_backup.backup_id,
-            &test_store,
-        ).await;
-
-        let duration = Utc::now().signed_duration_since(start_time);
-
-        match restore_result {
-            Ok(_) => {
-                // Verify restore completeness
-                let verification = self.verify_restore_completeness(&test_store).await?;
-
-                Ok(TestResult {
-                    test_name: "full_restore".to_string(),
-                    success: verification.complete,
-                    duration,
-                    details: format!(
-                        "Events restored: {}, Streams restored: {}",
-                        verification.events_count,
-                        verification.streams_count
-                    ),
-                    error: None,
-                })
-            }
-            Err(e) => {
-                Ok(TestResult {
-                    test_name: "full_restore".to_string(),
-                    success: false,
-                    duration,
-                    details: "Full restore failed".to_string(),
-                    error: Some(e.to_string()),
-                })
-            }
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct TestResults {
-    pub backup_creation: TestResult,
-    pub backup_verification: TestResult,
-    pub partial_restore: TestResult,
-    pub full_restore: Option<TestResult>,
-    pub point_in_time_recovery: TestResult,
-    pub cross_region_restore: TestResult,
-    pub overall_success: bool,
-    pub test_time: DateTime<Utc>,
-}
-
-impl TestResults {
-    fn all_tests_passed(&self) -> bool {
-        self.backup_creation.success &&
-        self.backup_verification.success &&
-        self.partial_restore.success &&
-        self.full_restore.as_ref().map_or(true, |t| t.success) &&
-        self.point_in_time_recovery.success &&
-        self.cross_region_restore.success
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct TestResult {
-    pub test_name: String,
-    pub success: bool,
-    pub duration: chrono::Duration,
-    pub details: String,
-    pub error: Option<String>,
-}
-```
+Because these drills use only real, published EventCore entry points
+(`run_projection`, `read_stream`, `migrate`, `ping`) plus storage-native
+tooling (`pg_restore`, `PRAGMA integrity_check`, file copy), they validate the
+exact path a real recovery takes — there is no bespoke backup framework to keep
+in sync with the library.
 
 ## Best Practices
 
-1. **Regular backups** - Automated, frequent backup schedules
-2. **Multiple strategies** - Full, incremental, and WAL-based backups
-3. **Geographic distribution** - Multi-region backup storage
-4. **Regular testing** - Automated backup and restore testing
-5. **Integrity verification** - Continuous data integrity monitoring
+1. **Regular backups** - Automated, frequent storage-layer backup schedules
+   (`pg_dump`/WAL archiving, SQLite file snapshots, file-store snapshots)
+2. **Point-in-time recovery** - Enable WAL archiving for PostgreSQL PITR
+3. **Geographic distribution** - Replicate backups to multiple regions
+4. **Regular restore drills** - Test restore _and_ replay, not just backup
+5. **Replayability checks** - Rebuild a projection with `run_projection` against
+   a restored store to prove events are intact
 6. **Recovery planning** - Documented disaster recovery procedures
 7. **Retention policies** - Appropriate data retention and archival
-8. **Security** - Encrypted backups and secure storage
+8. **Encryption at rest** - A storage concern: SQLite via the `encryption`
+   (SQLCipher) feature, PostgreSQL/file store via disk or tablespace encryption
 
 ## Summary
 
 EventCore backup and recovery:
 
-- ✅ **Comprehensive backups** - Full, incremental, and point-in-time
-- ✅ **Disaster recovery** - Multi-region failover capabilities
-- ✅ **Data integrity** - Continuous verification and monitoring
-- ✅ **Automated testing** - Regular backup and restore validation
-- ✅ **Recovery orchestration** - Automated disaster recovery procedures
+- ✅ **Storage-layer backups** - `pg_dump`/WAL archiving, SQLite/file snapshots
+- ✅ **Immutable, append-only events** - snapshots are consistent by construction
+- ✅ **Point-in-time recovery** - via PostgreSQL WAL replay (Barman/CloudNativePG)
+- ✅ **Replay-based verification** - rebuild projections with `run_projection`
+- ✅ **Disaster recovery** - operations code that restores storage and lets
+  EventCore resume from the restored events
 
-Key components:
+Key points:
 
-1. Implement automated backup strategies with multiple approaches
-2. Design disaster recovery procedures for various failure scenarios
-3. Continuously monitor data integrity with automated verification
-4. Test backup and recovery procedures regularly
-5. Maintain geographic distribution of backups for resilience
+1. EventCore has **no backup/restore API** — back up the storage layer
+2. Use the backend's native tooling (`pg_dump`/PITR, SQLite snapshots, file copy)
+3. Verify backups with storage-native checks, then prove replayability with
+   `run_projection` against a restored store
+4. Run restore-and-replay drills regularly, including cross-region copies
+5. Treat at-rest encryption as a storage concern (SQLCipher / disk encryption)
 
 Next, let's explore [Troubleshooting](./04-troubleshooting.md) →

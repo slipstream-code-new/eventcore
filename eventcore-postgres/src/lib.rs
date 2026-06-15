@@ -40,6 +40,7 @@ use uuid::Uuid;
 /// Errors that can occur when creating a [`PostgresEventStore`].
 #[derive(Debug, Error)]
 pub enum PostgresEventStoreError {
+    /// Failed to create the postgres connection pool.
     #[error("failed to create postgres connection pool")]
     ConnectionFailed(#[source] sqlx::Error),
 }
@@ -136,6 +137,11 @@ impl PostgresEventStore {
         Self { pool }
     }
 
+    /// Verify connectivity by issuing a trivial `SELECT 1` query.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the database is unreachable or the query fails.
     #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
     pub async fn ping(&self) {
         let _ = query("SELECT 1")
@@ -144,6 +150,14 @@ impl PostgresEventStore {
             .expect("postgres ping failed");
     }
 
+    /// Apply the bundled schema migrations via `sqlx::migrate!("./migrations")`.
+    ///
+    /// This creates the tables EventCore requires, including the
+    /// `eventcore_subscription_versions` table used by [`PostgresCheckpointStore`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if applying the migrations fails.
     #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
     pub async fn migrate(&self) {
         sqlx::migrate!("./migrations")

@@ -95,9 +95,10 @@ EventCore addresses the fundamental limitation of traditional event sourcing: **
 - Validation SHALL use `require!` macro for concise business rule checks
 - WHY: Separation of state reconstruction from business logic enables clarity
 
-**FR-2.3 Event Emission**
+**FR-2.3 Event Emission** _(Not realized as specified)_
 
-- API SHALL provide `emit!` macro for type-safe event creation
+- ~~API SHALL provide `emit!` macro for type-safe event creation~~
+- **UPDATE:** No `emit!` macro was implemented. The realized API has `handle()` return `NewEvents` directly (events are produced by returning `Ok(NewEvents)` from `handle()`); `require!` is the only macro the public API provides.
 - Events SHALL be associated with specific streams from declared set
 - Multiple events SHALL be generated per stream if needed
 - WHY: Developers need ergonomic API for event generation with compile-time safety

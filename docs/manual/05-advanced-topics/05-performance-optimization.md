@@ -93,9 +93,11 @@ let stream_declarations = self.read_streams_for_command(&command).await?;
         // Execute command using pure domain logic - command.handle takes reconstructed state and returns NewEvents
         let events = command.handle(state)?;
 
-        // Executor is responsible for translating NewEvents into storage writes and invalidating caches
+        // Executor is responsible for translating NewEvents into storage writes and invalidating caches.
+        // ExecutionResponse exposes only attempts() (no affected-streams field), so invalidate caches
+        // using the stream_declarations the command read rather than the returned response.
         let result = self.write_events(events).await?;
-        self.invalidate_cache_for_streams(&result.affected_streams).await;
+        self.invalidate_cache_for_streams(&stream_declarations).await;
 
         Ok(result)
     }

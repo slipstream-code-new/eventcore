@@ -123,24 +123,13 @@ fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandEr
 
 ### 5. Atomic Write Phase
 
-All events written atomically with version checks:
-
-```rust
-// EventCore ensures all-or-nothing write
-event_store.write_events(vec![
-    EventToWrite {
-        stream_id: order_stream,
-        payload: order_event,
-        expected_version: ExpectedVersion::Exact(order_version),
-    },
-    EventToWrite {
-        stream_id: inventory_stream,
-        payload: inventory_event,
-        expected_version: ExpectedVersion::Exact(inventory_version),
-    },
-    // ... more events
-]).await?;
-```
+You never write events yourself. Once `handle()` returns its `NewEvents`,
+`execute()` appends every event across every declared stream in a single
+all-or-nothing transaction, checking that each stream is still at the version
+that was read during state reconstruction (optimistic concurrency control). If
+any declared stream advanced in the meantime, the entire write is rejected and
+`execute()` transparently retries the command against the fresh state — there is
+no partial write: either all events land, or none do.
 
 ## Consistency Guarantees
 
@@ -345,12 +334,12 @@ Reading more streams has costs:
 
 ```rust
 // Instead of one hot stream
-let stream = StreamId::from_static("orders");
+let stream = StreamId::try_new("orders").unwrap();
 
 // Partition by customer segment
-let stream = StreamId::from(format!("orders-{}",
+let stream = StreamId::try_new(format!("orders-{}",
     customer_id.hash() % 16
-));
+)).unwrap();
 ```
 
 2. **Lazy Stream Loading**
@@ -366,12 +355,10 @@ if state.requires_detailed_check() {
 
 3. **Read Filtering**
 
-```rust
-// EventCore may support filtered reads (future feature)
-let options = ReadOptions::default()
-    .from_version(EventVersion::new(1000))  // Skip old events
-    .event_types(&["OrderPlaced", "OrderShipped"]); // Only specific types
-```
+   Commands always read each declared stream in full via `read_stream`; there is
+   no per-command read-filtering or version-windowing API. When you need to
+   consume a filtered or cross-stream view of events, build a read model with a
+   `Projector` and `run_projection()` instead of filtering inside a command.
 
 ## Testing Multi-Stream Commands
 
@@ -389,8 +376,8 @@ async fn test_multi_stream_atomicity() {
 
     // Execute transfer
     let transfer = TransferMoney {
-        from_account: StreamId::from_static("account-1"),
-        to_account: StreamId::from_static("account-2"),
+        from_account: StreamId::try_new("account-1").unwrap(),
+        to_account: StreamId::try_new("account-2").unwrap(),
         amount: 300,
     };
 
@@ -421,20 +408,20 @@ async fn test_concurrent_transfers() {
 
     // Concurrent transfers forming a cycle
     let transfer_ab = TransferMoney {
-        from_account: StreamId::from_static("A"),
-        to_account: StreamId::from_static("B"),
+        from_account: StreamId::try_new("A").unwrap(),
+        to_account: StreamId::try_new("B").unwrap(),
         amount: 100,
     };
 
     let transfer_bc = TransferMoney {
-        from_account: StreamId::from_static("B"),
-        to_account: StreamId::from_static("C"),
+        from_account: StreamId::try_new("B").unwrap(),
+        to_account: StreamId::try_new("C").unwrap(),
         amount: 100,
     };
 
     let transfer_ca = TransferMoney {
-        from_account: StreamId::from_static("C"),
-        to_account: StreamId::from_static("A"),
+        from_account: StreamId::try_new("C").unwrap(),
+        to_account: StreamId::try_new("A").unwrap(),
         amount: 100,
     };
 

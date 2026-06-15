@@ -118,8 +118,10 @@ impl Projector for OrderSummaryProjection {
     }
 }
 
-// Run the projection against the store:
-run_projection(projection, &store).await?;
+// Run the projection against the store.
+// ProjectionConfig::default() runs a single batch pass; call .continuous()
+// to enable continuous polling.
+run_projection(projection, &store, ProjectionConfig::default()).await?;
 ```
 
 **Capabilities:**
@@ -320,9 +322,10 @@ EventCore provides structured error handling:
 
 ```rust
 // CommandError variants (simplified):
-// - BusinessRuleViolation(String) — Business rule violations
-// - VersionConflict — Optimistic concurrency conflicts (retried automatically)
-// - StoreError — Infrastructure errors from the EventStore
+// - BusinessRuleViolation(Box<dyn Error + Send + Sync>) — Business rule violations
+// - ConcurrencyError(u32) — Optimistic concurrency conflicts (retried automatically)
+// - EventStoreError(EventStoreError) — Infrastructure errors from the EventStore
+// - ValidationError(String) — Invalid command state during execution
 ```
 
 Errors are categorized for appropriate handling:
@@ -349,7 +352,7 @@ TransferMoney
   ├─ stream_declarations (5ms)
   ├─ reconstruct_state (2ms)
   ├─ handle_command (3ms)
-  └─ write_events (5ms)
+  └─ append_events (5ms)
 ```
 
 ## Summary

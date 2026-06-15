@@ -1,16 +1,110 @@
 # Chapter 5.2: Event Versioning
 
-Event versioning is a systematic approach to managing changes in event schemas while preserving the ability to read historical data. This chapter covers EventCore's versioning strategies and implementation patterns.
+Event versioning is a systematic approach to managing changes in event schemas
+while preserving the ability to read historical data. This chapter covers how
+EventCore handles schema change and the application-level patterns you can build
+on top of it.
+
+## How EventCore Handles Versions
+
+It is important to be clear about what EventCore does and does not do, because
+the rest of this chapter builds on it.
+
+EventCore stores events as JSON blobs via `serde`. Deserialization is driven
+entirely by the JSON structure. The `event_type` column stored alongside each
+event (derived from your event type's `Event::event_type_name()`) is
+informational metadata for auditing and debugging — it is **not** used to route
+or version events during deserialization.
+
+Because of this, EventCore deliberately has **no** version registry, no upcasting
+subsystem, and no per-event version field. Schema evolution is handled with two
+plain `serde` techniques, formalized in
+[ADR-0035](../../adr/ADR-0035-event-schema-evolution-via-enum-variants.md):
+
+1. **Additive changes** — add a new field with `#[serde(default)]`. Old events
+   deserialize with the default value. No other changes are required.
+2. **Incompatible changes** — add a **new enum variant** rather than mutating an
+   existing one. Old variants remain so historical events still deserialize;
+   `apply()` and projectors match every variant.
+
+Everything else in this chapter — explicit semantic version markers, migration
+chains, archival, and version metrics — is an **application-level** pattern you
+may choose to build. None of it is provided by EventCore, and none of it is
+required to evolve schemas safely.
 
 ## Versioning Strategies
 
-### Semantic Versioning for Events
+### Additive Evolution with serde Defaults
 
-Apply semantic versioning principles to events:
+The simplest evolution is adding fields. Mark new fields with `#[serde(default)]`
+so historical events that lack the field still deserialize:
 
 ```rust
-// Application-level event versioning pattern
+use eventcore::StreamId;
+use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum UserEvent {
+    Registered {
+        stream_id: StreamId,
+        email: Email,
+        username: Username,
+
+        // Added later — old events deserialize with the default.
+        #[serde(default)]
+        preferences: UserPreferences,
+    },
+}
+```
+
+This is a backward-compatible change: no migration step, no new variant, and
+the same `apply()` / projection code keeps working.
+
+### Incompatible Evolution with New Variants
+
+When a change cannot be expressed as an additive field — a field is removed, a
+type changes meaning, or an invariant changes — add a new variant instead of
+editing the old one (see ADR-0035). Old variants are kept forever because they
+represent historical facts:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum UserEvent {
+    // Original variant — still deserializes from historical events.
+    RegisteredV1 {
+        user_id: UserId,
+        email: Email,
+        username: Username,
+    },
+
+    // Incompatible reshape — emitted going forward.
+    RegisteredV2 {
+        user_id: UserId,
+        email: Email,
+        first_name: FirstName,
+        last_name: LastName,
+    },
+}
+```
+
+The rules from ADR-0035:
+
+1. Old variants are never removed.
+2. `apply()` handles all variants.
+3. `handle()` emits only the latest variant.
+4. Projectors handle all variants.
+
+The Rust compiler enforces rule 2 and rule 4 for you: adding a variant turns
+every non-exhaustive `match` into a compile error until you handle it.
+
+### Application-Level Version Markers (Optional)
+
+If you want explicit, human-readable version markers for documentation or
+compatibility checks, you can define your own value type. This is purely an
+application convention — EventCore never reads it:
+
+```rust
+// Application-level version marker. Not an EventCore type.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct EventSchemaVersion {
     major: u32,
@@ -29,26 +123,23 @@ impl EventSchemaVersion {
 
     // Backward compatible additions
     const V1_1_0: Self = Self::new(1, 1, 0);
-    const V1_2_0: Self = Self::new(1, 2, 0);
-
-    // Bug fixes/clarifications
-    const V1_0_1: Self = Self::new(1, 0, 1);
-}
-
-trait VersionedEvent {
-    const EVENT_TYPE: &'static str;
-    const VERSION: EventSchemaVersion;
-
-    fn is_compatible_with(version: &EventSchemaVersion) -> bool;
 }
 ```
 
-### Linear Versioning
+## Version-Aware Serialization
 
-Simpler approach with incremental versions:
+EventCore does **not** provide a versioned serializer, a type registry, or a
+versioned payload wrapper. Serialization is handled by `serde` and the JSON the
+backend stores. Versioning happens at the type level using the variant approach
+above.
+
+The idiomatic way to carry an explicit version tag in the JSON is serde's
+externally- or internally-tagged enum representation. With an internal tag, the
+version becomes a field in the stored JSON and `serde` selects the right variant
+on read:
 
 ```rust
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "version")]
 enum UserEvent {
     #[serde(rename = "1")]
@@ -61,631 +152,402 @@ enum UserEvent {
     V3(UserEventV3),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct UserEventV1 {
-    pub user_id: String,
-    pub email: String,
-    pub username: String,
+    user_id: UserId,
+    email: Email,
+    username: Username,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct UserEventV2 {
-    pub user_id: UserId,
-    pub email: Email,
-    pub first_name: String,
-    pub last_name: String,
+    user_id: UserId,
+    email: Email,
+    first_name: FirstName,
+    last_name: LastName,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct UserEventV3 {
-    pub user_id: UserId,
-    pub email: Email,
-    pub profile: UserProfile,
-    pub preferences: UserPreferences,
+    user_id: UserId,
+    email: Email,
+    profile: UserProfile,
+    preferences: UserPreferences,
 }
 ```
 
-## Version-Aware Serialization
+With this layout, every event is just one of the variants of `UserEvent`. There
+is nothing to register: when EventCore reads the stream, `serde` deserializes the
+JSON straight into the correct variant.
 
-EventCore provides automatic version handling:
+## Migration Chains (Application-Level)
+
+Because EventCore does not transform historical events, "migration" is an
+application-level read-time concern: you fold every historical variant into the
+shape your code wants to work with. The variant `match` in `apply()` and in your
+projectors already does this for write-model and read-model state respectively.
+
+If you also want a reusable, free-standing helper that normalizes an old variant
+to the latest shape (for example, to share logic between a command and a
+projection's read path), you can write one. The example below is **not** an
+EventCore API — it is plain application code operating on your own enum:
 
 ```rust
-// Application-level versioned serializer
-
-#[derive(Clone)]
-struct EventSerializer {
-    format: SerializationFormat,
-    registry: TypeRegistry,
-}
-
-impl EventSerializer {
-    fn new() -> Self {
-        let mut registry = TypeRegistry::new();
-
-        // Register all versions
-        registry.register_versioned::<UserEventV1>("UserEvent", 1);
-        registry.register_versioned::<UserEventV2>("UserEvent", 2);
-        registry.register_versioned::<UserEventV3>("UserEvent", 3);
-
-        Self {
-            format: SerializationFormat::Json,
-            registry,
+// Application-level read-time normalization. Not an EventCore API.
+// Folds any historical variant into the latest in-memory shape.
+fn normalize_to_latest(event: UserEvent) -> UserEventV3 {
+    match event {
+        UserEvent::V1(v1) => {
+            // V1 -> V2: extract names from the legacy username.
+            let (first_name, last_name) = split_username(v1.username.as_ref());
+            normalize_to_latest(UserEvent::V2(UserEventV2 {
+                user_id: v1.user_id,
+                email: v1.email,
+                first_name,
+                last_name,
+            }))
         }
-    }
-
-    fn serialize_event<T>(&self, event: &T) -> Result<VersionedPayload, SerializationError>
-    where
-        T: Serialize + VersionedEvent,
-    {
-        let data = self.format.serialize(event)?;
-
-        Ok(VersionedPayload {
-            event_type: T::EVENT_TYPE.to_string(),
-            version: T::VERSION.to_string(),
-            format: self.format,
-            data,
-        })
-    }
-
-    fn deserialize_event<T>(&self, payload: &VersionedPayload) -> Result<T, SerializationError>
-    where
-        T: DeserializeOwned + VersionedEvent,
-    {
-        // Check version compatibility
-        let payload_version = EventSchemaVersion::parse(&payload.version)?;
-        if !T::is_compatible_with(&payload_version) {
-            return Err(SerializationError::IncompatibleVersion {
-                expected: T::VERSION,
-                found: payload_version,
-            });
-        }
-
-        self.format.deserialize(&payload.data)
+        UserEvent::V2(v2) => UserEventV3 {
+            user_id: v2.user_id,
+            email: v2.email,
+            profile: UserProfile::from_names(v2.first_name, v2.last_name),
+            preferences: UserPreferences::default(),
+        },
+        UserEvent::V3(v3) => v3,
     }
 }
 
-#[derive(Debug, Clone)]
-struct VersionedPayload {
-    event_type: String,
-    version: String,
-    format: SerializationFormat,
-    data: Vec<u8>,
+fn split_username(username: &str) -> (FirstName, LastName) {
+    // ... domain-specific parsing returning your own validated types ...
+    # unimplemented!()
 }
 ```
 
-## Migration Chains
+Note that this normalization happens **in memory after reading** — the stored
+events are never rewritten. This preserves immutability: a V1 event stays a V1
+event on disk forever.
 
-Handle complex version transitions:
+## Reading and Writing Versioned Events
+
+EventCore has a single write path and a single read path. There is no
+`write_versioned_events`, `read_versioned_stream`, `EventToWrite`, or
+`WriteResult` — those types and methods do not exist.
+
+### Writing
+
+Events are never constructed and appended by application code directly. A
+command's `handle()` returns the new events as `NewEvents`, and `execute()`
+appends them atomically with optimistic concurrency control. To "write a
+versioned event," your `handle()` simply returns the latest variant:
 
 ```rust
-// Application-level migration chain
+use eventcore::{execute, CommandError, CommandLogic, NewEvents, RetryPolicy};
 
-struct UserEventMigrationChain {
-    migrations: Vec<Box<dyn Migration<UserEvent, UserEvent>>>,
-}
+impl CommandLogic for RegisterUser {
+    type Event = UserEvent;
+    type State = UserState;
 
-impl UserEventMigrationChain {
-    fn new() -> Self {
-        let migrations: Vec<Box<dyn Migration<UserEvent, UserEvent>>> = vec![
-            Box::new(V1ToV2Migration),
-            Box::new(V2ToV3Migration),
-        ];
-
-        Self { migrations }
-    }
-
-    fn migrate_to_latest(&self, event: UserEvent, from_version: u32) -> Result<UserEvent, MigrationError> {
-        let mut current_event = event;
-        let mut current_version = from_version;
-
-        // Apply migrations in sequence
-        while current_version < UserEvent::LATEST_VERSION {
-            let migration = self.migrations
-                .get((current_version - 1) as usize)
-                .ok_or(MigrationError::NoMigrationPath {
-                    from: current_version,
-                    to: UserEvent::LATEST_VERSION
-                })?;
-
-            current_event = migration.migrate(current_event)?;
-            current_version += 1;
-        }
-
-        Ok(current_event)
-    }
-}
-
-struct V1ToV2Migration;
-
-impl Migration<UserEvent, UserEvent> for V1ToV2Migration {
-    fn migrate(&self, event: UserEvent) -> Result<UserEvent, MigrationError> {
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        // Fold every historical variant into write-model state.
         match event {
-            UserEvent::V1(v1) => {
-                // Convert V1 to V2
-                let user_id = UserId::try_from(v1.user_id)
-                    .map_err(|e| MigrationError::ConversionFailed(e.to_string()))?;
-
-                let email = Email::try_from(v1.email)
-                    .map_err(|e| MigrationError::ConversionFailed(e.to_string()))?;
-
-                // Extract names from username
-                let (first_name, last_name) = split_username(&v1.username);
-
-                Ok(UserEvent::V2(UserEventV2 {
-                    user_id,
-                    email,
-                    first_name,
-                    last_name,
-                }))
-            }
-            other => Ok(other), // Already V2 or later
+            UserEvent::V1(v1) => state.with_user_v1(v1),
+            UserEvent::V2(v2) => state.with_user_v2(v2),
+            UserEvent::V3(v3) => state.with_user_v3(v3),
         }
     }
-}
 
-fn split_username(username: &str) -> (String, String) {
-    let parts: Vec<&str> = username.split('_').collect();
-    match parts.len() {
-        1 => (parts[0].to_string(), String::new()),
-        2 => (parts[0].to_string(), parts[1].to_string()),
-        _ => (parts[0].to_string(), parts[1..].join("_")),
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+        state.require_not_registered()?;
+        // Always emit the latest variant.
+        Ok(vec![UserEvent::V3(self.to_v3())].into())
     }
 }
+
+// Persisted atomically through the single entry point.
+let response = execute(store, command, RetryPolicy::default()).await?;
 ```
 
-## Event Store Integration
+### Reading
 
-Integrate versioning with the event store:
+To read a stream's full history, use the `EventStore::read_stream` method and
+the `collect_events` helper to materialize it as a `Vec`. The store yields events
+in stream-version order; your code matches on the variant to interpret each one:
 
 ```rust
-// Versioned event store wraps an inner store and handles serialization/migration.
-// EventCore's EventStore trait uses free-function execution via execute(&store, command, policy).
-// This wrapper can be used as the store argument to execute().
-impl VersionedEventStore {
-    async fn write_versioned_events(
-        &self,
-        events: Vec<EventToWrite>,
-    ) -> Result<WriteResult, EventStoreError> {
-        let versioned_events: Result<Vec<_>, _> = events
-            .into_iter()
-            .map(|event| {
-                let payload = self.serializer.serialize_event(&event)?;
-                Ok(payload)
-            })
-            .collect();
+use eventcore::{collect_events, StreamId};
+use eventcore_types::EventStore;
 
-        self.inner.write_events(versioned_events?).await
-    }
+let stream_id = StreamId::try_new("user-123")?;
+let events: Vec<UserEvent> = collect_events(store.read_stream(stream_id).await?).await?;
 
-    async fn read_versioned_stream(
-        &self,
-        stream_id: &StreamId,
-    ) -> Result<Vec<VersionedEvent>, EventStoreError> {
-        let raw_events = self.inner.read_stream(stream_id).await?;
-
-        raw_events
-            .into_iter()
-            .map(|event| {
-                self.serializer.deserialize_event(&event)
-            })
-            .collect()
-    }
+for event in events {
+    // Each event is one of the historical variants.
+    let latest = normalize_to_latest(event);
+    // ... use the normalized in-memory shape ...
 }
 ```
+
+In normal application code you rarely read streams by hand like this — that is
+what command execution and projections do for you. The snippet above is for the
+occasional case where you need the raw history (tooling, diagnostics, one-off
+analysis).
 
 ## Version-Aware Projections
 
-Projections that handle multiple event versions:
+Projections are the read model. A `Projector` receives each event via `apply()`
+and updates its read model. Because EventCore's compiler-checked enums force you
+to handle every variant, a version-aware projection is just an exhaustive
+`match`:
 
 ```rust
-// Version-aware projection handling
-impl UserProjection {
-    fn apply_event(&mut self, event: &VersionedEvent, occurred_at: DateTime<Utc>) -> Result<(), ProjectionError> {
-        match event {
-            VersionedEvent::User(user_event) => {
-                self.apply_user_event(user_event, occurred_at)?;
-            }
-            _ => {} // Ignore other event types
-        }
-        Ok(())
-    }
+use eventcore::{Projector, StreamPosition};
+
+// Application-level read model state.
+struct UserReadModel {
+    users: HashMap<UserId, UserView>,
 }
 
-impl UserProjection {
-    fn apply_user_event(
+impl Projector for UserProjection {
+    type Event = UserEvent;
+    type Error = std::convert::Infallible;
+    type Context = UserReadModel;
+
+    fn apply(
         &mut self,
-        event: &UserEvent,
-        occurred_at: DateTime<Utc>
-    ) -> Result<(), ProjectionError> {
+        event: Self::Event,
+        _position: StreamPosition,
+        ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
         match event {
             UserEvent::V1(v1) => {
-                // Handle V1 events
-                let user = User {
-                    id: UserId::try_from(v1.user_id.clone())?,
-                    email: v1.email.clone(),
-                    display_name: v1.username.clone(),
-                    first_name: None,
-                    last_name: None,
+                let view = UserView {
+                    id: v1.user_id,
+                    email: v1.email,
+                    display_name: v1.username.into(),
                     profile: None,
                     preferences: UserPreferences::default(),
-                    created_at: occurred_at,
-                    updated_at: occurred_at,
                 };
-                self.users.insert(user.id.clone(), user);
+                ctx.users.insert(view.id.clone(), view);
             }
             UserEvent::V2(v2) => {
-                // Handle V2 events
-                let user = User {
-                    id: v2.user_id.clone(),
-                    email: v2.email.to_string(),
-                    display_name: format!("{} {}", v2.first_name, v2.last_name),
-                    first_name: Some(v2.first_name.clone()),
-                    last_name: Some(v2.last_name.clone()),
+                let view = UserView {
+                    id: v2.user_id,
+                    email: v2.email,
+                    display_name: format!("{} {}", v2.first_name, v2.last_name).into(),
                     profile: None,
                     preferences: UserPreferences::default(),
-                    created_at: occurred_at,
-                    updated_at: occurred_at,
                 };
-                self.users.insert(user.id.clone(), user);
+                ctx.users.insert(view.id.clone(), view);
             }
             UserEvent::V3(v3) => {
-                // Handle V3 events
-                let user = User {
-                    id: v3.user_id.clone(),
-                    email: v3.email.to_string(),
+                let view = UserView {
+                    id: v3.user_id,
+                    email: v3.email,
                     display_name: v3.profile.display_name(),
-                    first_name: Some(v3.profile.first_name.clone()),
-                    last_name: Some(v3.profile.last_name.clone()),
-                    profile: Some(v3.profile.clone()),
-                    preferences: v3.preferences.clone(),
-                    created_at: occurred_at,
-                    updated_at: occurred_at,
+                    profile: Some(v3.profile),
+                    preferences: v3.preferences,
                 };
-                self.users.insert(user.id.clone(), user);
+                ctx.users.insert(view.id.clone(), view);
             }
         }
         Ok(())
     }
+
+    fn name(&self) -> &str {
+        "user-read-model"
+    }
 }
 ```
 
-## Version Compatibility Rules
+The projector is run with `run_projection(projector, &backend, config)`. See
+[Projections](../02-getting-started/04-projections.md) for the full runner API.
 
-Define clear compatibility rules:
+## Version Compatibility Rules (Application-Level)
+
+If your domain needs an explicit compatibility policy — for instance, an external
+consumer that should refuse to process events it does not understand — you can
+encode the rules in application code. This is your own logic; EventCore does not
+gate reads on a compatibility check:
 
 ```rust
+// Application-level compatibility policy. Not an EventCore concept.
 #[derive(Debug, Clone, PartialEq)]
 enum CompatibilityLevel {
-    FullyCompatible,    // Can read/write without issues
-    ReadOnly,           // Can read but not write
-    RequiresMigration,  // Need migration to use
-    Incompatible,       // Cannot use
+    FullyCompatible,   // Can interpret directly
+    RequiresMigration, // Need normalization to use
+    Incompatible,      // Cannot use
 }
 
-trait VersionCompatibility {
-    fn check_compatibility(reader_version: &str, event_version: &str) -> CompatibilityLevel;
-}
-
-struct UserEventCompatibility;
-
-impl VersionCompatibility for UserEventCompatibility {
-    fn check_compatibility(reader_version: &str, event_version: &str) -> CompatibilityLevel {
-        use CompatibilityLevel::*;
-
-        match (reader_version, event_version) {
-            // Same version - fully compatible
-            (r, e) if r == e => FullyCompatible,
-
-            // Reader newer than event - usually compatible
-            ("2", "1") | ("3", "1") | ("3", "2") => FullyCompatible,
-
-            // Reader older than event - may need migration
-            ("1", "2") | ("1", "3") | ("2", "3") => RequiresMigration,
-
-            // Special compatibility rules
-            ("1.1", "1.0") => FullyCompatible, // Minor versions compatible
-
-            _ => Incompatible,
-        }
-    }
-}
-
-// Usage in deserialization
-fn deserialize_with_compatibility_check<T>(
-    payload: &VersionedPayload,
-    reader_version: &str,
-) -> Result<T, SerializationError>
-where
-    T: DeserializeOwned + VersionCompatibility,
-{
-    let compatibility = T::check_compatibility(reader_version, &payload.version);
-
-    match compatibility {
-        CompatibilityLevel::FullyCompatible => {
-            // Direct deserialization
-            serde_json::from_slice(&payload.data)
-                .map_err(SerializationError::Deserialization)
-        }
-        CompatibilityLevel::ReadOnly => {
-            // Deserialize but mark as read-only
-            let mut event: T = serde_json::from_slice(&payload.data)?;
-            // Mark event as read-only somehow
-            Ok(event)
-        }
-        CompatibilityLevel::RequiresMigration => {
-            // Apply migration
-            let migrated = migrate_to_version(&payload.data, &payload.version, reader_version)?;
-            serde_json::from_slice(&migrated)
-                .map_err(SerializationError::Deserialization)
-        }
-        CompatibilityLevel::Incompatible => {
-            Err(SerializationError::IncompatibleVersion {
-                reader: reader_version.to_string(),
-                event: payload.version.clone(),
-            })
-        }
+fn check_compatibility(reader_version: u32, event_version: u32) -> CompatibilityLevel {
+    use CompatibilityLevel::*;
+    match (reader_version, event_version) {
+        (r, e) if r == e => FullyCompatible,
+        // Reader newer than the event — normalize forward.
+        (r, e) if r > e => RequiresMigration,
+        // Reader older than the event — cannot interpret newer schema.
+        _ => Incompatible,
     }
 }
 ```
 
-## Event Archival and Compression
+In practice, the new-variant strategy makes most of this unnecessary: as long as
+all readers are rebuilt against the current event enum, the compiler guarantees
+every reader handles every variant.
 
-Handle old event versions efficiently:
+## Event Archival and Retention (Application-Level)
+
+EventCore treats events as immutable, append-only facts and does not provide
+archival, compression, or deletion APIs. If your operational requirements call
+for it, archival is implemented at the storage layer outside of EventCore — for
+example, with database-native partitioning, cold-storage tiering, or backup
+tooling specific to your backend.
+
+The key constraints to respect:
+
+- **Do not rewrite events.** Schema evolution never mutates stored events;
+  archival should not either.
+- **Preserve order and identity.** Any retention scheme must keep events in
+  stream-version order and keep their `StreamPosition` (a UUIDv7) stable so
+  projections can resume from a checkpoint.
+- **Coordinate with projections.** Removing or relocating historical events can
+  invalidate read models that replay from the beginning. Rebuild affected
+  projections after any retention operation.
+
+Design these policies around your chosen backend's capabilities rather than
+expecting EventCore to manage retention.
+
+## Monitoring Version Usage
+
+EventCore does not ship a metrics module. It exposes exactly one metrics
+integration point: the `MetricsHook` trait, wired into command execution via
+`RetryPolicy::with_metrics_hook`. The hook is notified on retry attempts; all
+other telemetry is owned by your application.
 
 ```rust
-// Application-level event archival
+use eventcore::{execute, MetricsHook, RetryContext, RetryPolicy};
 
-struct VersionedEventArchiver {
-    archiver: EventArchiver,
-    retention_policy: RetentionPolicy,
-}
+// Application-owned metrics sink implementing the EventCore hook.
+struct PrometheusRetryHook;
 
-#[derive(Debug, Clone)]
-struct RetentionPolicy {
-    pub keep_latest_versions: u32,
-    pub archive_after_days: u32,
-    pub compress_after_days: u32,
-    pub delete_after_years: u32,
-}
-
-impl VersionedEventArchiver {
-    async fn archive_old_versions(&self, stream_id: &StreamId) -> Result<ArchiveResult, ArchiveError> {
-        let events = self.read_all_events(stream_id).await?;
-        let mut archive_stats = ArchiveResult::default();
-
-        for event in events {
-            let age_days = (Utc::now() - event.occurred_at).num_days() as u32;
-
-            match event.version() {
-                v if v < (CURRENT_VERSION - self.retention_policy.keep_latest_versions) => {
-                    if age_days > self.retention_policy.delete_after_years * 365 {
-                        // Delete very old events
-                        self.archiver.delete_event(&event.id).await?;
-                        archive_stats.deleted += 1;
-                    } else if age_days > self.retention_policy.compress_after_days {
-                        // Compress old events
-                        self.archiver.compress_event(&event.id, CompressionLevel::High).await?;
-                        archive_stats.compressed += 1;
-                    } else if age_days > self.retention_policy.archive_after_days {
-                        // Move to cold storage
-                        self.archiver.archive_event(&event.id).await?;
-                        archive_stats.archived += 1;
-                    }
-                }
-                _ => {
-                    // Keep recent versions in hot storage
-                    archive_stats.retained += 1;
-                }
-            }
-        }
-
-        Ok(archive_stats)
+impl MetricsHook for PrometheusRetryHook {
+    fn on_retry_attempt(&self, ctx: &RetryContext) {
+        // ctx exposes: streams (Vec<StreamId>), attempt (AttemptNumber),
+        // delay_ms (DelayMilliseconds).
+        metrics::counter!("eventcore_command_retries_total").increment(1);
     }
 }
 
-#[derive(Debug, Default)]
-struct ArchiveResult {
-    pub retained: u32,
-    pub archived: u32,
-    pub compressed: u32,
-    pub deleted: u32,
-}
+let policy = RetryPolicy::default().with_metrics_hook(PrometheusRetryHook);
+let response = execute(store, command, policy).await?;
 ```
 
-## Version Monitoring
-
-Monitor version usage in production:
+To track which event versions are flowing through your system, instrument your
+own projection or command code — for example, increment a counter inside the
+projector's `apply()` based on the matched variant. EventCore does not record
+version usage for you, so this counting lives entirely in application code:
 
 ```rust
-use prometheus::{Counter, Histogram, IntGauge};
-
-lazy_static! {
-    static ref EVENT_VERSION_COUNTER: Counter = register_counter!(
-        "eventcore_event_versions_total",
-        "Total events by version"
-    ).unwrap();
-
-    static ref MIGRATION_DURATION: Histogram = register_histogram!(
-        "eventcore_migration_duration_seconds",
-        "Time spent migrating events"
-    ).unwrap();
-
-    static ref ACTIVE_VERSIONS: IntGauge = register_int_gauge!(
-        "eventcore_active_event_versions",
-        "Number of active event versions"
-    ).unwrap();
-}
-
-struct VersionMetrics {
-    version_counts: HashMap<String, u64>,
-    migration_stats: HashMap<(String, String), MigrationStats>,
-}
-
-#[derive(Debug, Default)]
-struct MigrationStats {
-    pub total_migrations: u64,
-    pub successful_migrations: u64,
-    pub failed_migrations: u64,
-    pub average_duration: Duration,
-}
-
-impl VersionMetrics {
-    fn record_event_version(&mut self, event_type: &str, version: &str) {
-        *self.version_counts
-            .entry(format!("{}:{}", event_type, version))
-            .or_insert(0) += 1;
-
-        EVENT_VERSION_COUNTER
-            .with_label_values(&[event_type, version])
-            .inc();
-    }
-
-    fn record_migration(&mut self, from: &str, to: &str, duration: Duration, success: bool) {
-        let key = (from.to_string(), to.to_string());
-        let stats = self.migration_stats.entry(key).or_default();
-
-        stats.total_migrations += 1;
-        if success {
-            stats.successful_migrations += 1;
-        } else {
-            stats.failed_migrations += 1;
-        }
-
-        // Update average duration
-        let total_time = stats.average_duration * (stats.total_migrations - 1) as u32 + duration;
-        stats.average_duration = total_time / stats.total_migrations as u32;
-
-        MIGRATION_DURATION.observe(duration.as_secs_f64());
-    }
-
-    fn update_active_versions(&self) {
-        let active_count = self.version_counts
-            .keys()
-            .map(|key| key.split(':').nth(1).unwrap_or("unknown"))
-            .collect::<HashSet<_>>()
-            .len();
-
-        ACTIVE_VERSIONS.set(active_count as i64);
-    }
+// Application-owned metric, incremented inside your own projector/handler.
+fn record_event_version(variant: &str) {
+    metrics::counter!("app_event_versions_total", "variant" => variant.to_string())
+        .increment(1);
 }
 ```
 
 ## Testing Event Versions
 
-Comprehensive testing for versioned events:
+The most valuable versioning test verifies that historical JSON still
+deserializes and that every variant is handled. Because there is no serializer to
+register, you test with plain `serde_json` against the JSON shape your backend
+stores:
 
 ```rust
 #[cfg(test)]
 mod version_tests {
     use super::*;
-    use proptest::prelude::*;
 
     #[test]
-    fn test_version_serialization_roundtrip() {
-        let v3_event = UserEventV3 {
+    fn historical_v1_json_still_deserializes() {
+        // JSON captured from a real V1 event on disk.
+        let json = r#"{ "version": "1", "user_id": "user-123",
+                        "email": "test@example.com", "username": "test_user" }"#;
+
+        let event: UserEvent = serde_json::from_str(json).expect("V1 must still decode");
+        assert!(matches!(event, UserEvent::V1(_)));
+    }
+
+    #[test]
+    fn additive_field_defaults_for_old_events() {
+        // Old JSON lacks the later #[serde(default)] field.
+        let json = r#"{ "version": "3", "user_id": "user-123",
+                        "email": "test@example.com", "profile": { } }"#;
+
+        let event: UserEvent = serde_json::from_str(json).expect("old V3 must decode");
+        if let UserEvent::V3(v3) = event {
+            assert_eq!(v3.preferences, UserPreferences::default());
+        }
+    }
+
+    #[test]
+    fn read_time_normalization_covers_all_variants() {
+        let v1 = UserEvent::V1(UserEventV1 {
             user_id: UserId::new(),
             email: Email::try_new("test@example.com").unwrap(),
-            profile: UserProfile {
-                first_name: "Test".to_string(),
-                last_name: "User".to_string(),
-                bio: Some("Test bio".to_string()),
-                avatar_url: None,
-            },
-            preferences: UserPreferences::default(),
-        };
-
-        let serializer = EventSerializer::new();
-
-        // Serialize
-        let payload = serializer.serialize_event(&v3_event).unwrap();
-        assert_eq!(payload.version, "3");
-
-        // Deserialize
-        let deserialized: UserEventV3 = serializer.deserialize_event(&payload).unwrap();
-        assert_eq!(v3_event.user_id, deserialized.user_id);
-        assert_eq!(v3_event.email, deserialized.email);
-    }
-
-    #[test]
-    fn test_migration_chain() {
-        let v1_event = UserEvent::V1(UserEventV1 {
-            user_id: "user_123".to_string(),
-            email: "test@example.com".to_string(),
-            username: "test_user".to_string(),
+            username: Username::try_new("test_user").unwrap(),
         });
 
-        let migration_chain = UserEventMigrationChain::new();
-        let v3_event = migration_chain.migrate_to_latest(v1_event, 1).unwrap();
-
-        match v3_event {
-            UserEvent::V3(v3) => {
-                assert_eq!(v3.email.to_string(), "test@example.com");
-                assert_eq!(v3.profile.first_name, "test");
-                assert_eq!(v3.profile.last_name, "user");
-            }
-            _ => panic!("Expected V3 event after migration"),
-        }
-    }
-
-    proptest! {
-        #[test]
-        fn version_compatibility_is_transitive(
-            v1 in 1u32..10,
-            v2 in 1u32..10,
-            v3 in 1u32..10,
-        ) {
-            let versions = [v1, v2, v3];
-            versions.sort();
-            let [min_v, mid_v, max_v] = versions;
-
-            // If min compatible with mid, and mid compatible with max,
-            // then migration chain should work
-            if UserEventCompatibility::check_compatibility(
-                &mid_v.to_string(), &min_v.to_string()
-            ) != CompatibilityLevel::Incompatible &&
-            UserEventCompatibility::check_compatibility(
-                &max_v.to_string(), &mid_v.to_string()
-            ) != CompatibilityLevel::Incompatible {
-                // Migration from min to max should be possible
-                prop_assert!(can_migrate_between_versions(min_v, max_v));
-            }
-        }
-    }
-
-    fn can_migrate_between_versions(from: u32, to: u32) -> bool {
-        // Implementation depends on your migration chain
-        to >= from && (to - from) <= MAX_MIGRATION_DISTANCE
+        let latest = normalize_to_latest(v1);
+        assert_eq!(latest.email.as_ref(), "test@example.com");
     }
 }
 ```
 
+Drive the full path — append the latest variant through `execute()` and replay
+through a projector — with an integration test against
+`eventcore_memory::InMemoryEventStore`, exactly as a downstream consumer would.
+
 ## Best Practices
 
-1. **Version everything explicitly** - Don't rely on implicit versioning
-2. **Plan migration paths** - Design how old versions become new ones
-3. **Test all paths** - Test reading old events with new code
-4. **Monitor version usage** - Track which versions are in production
-5. **Clean up old versions** - Archive or delete very old events
-6. **Document changes** - Keep detailed changelogs
-7. **Gradual rollouts** - Deploy new versions incrementally
-8. **Backward compatibility** - Maintain as long as practical
+1. **Prefer additive changes.** A `#[serde(default)]` field is the cheapest
+   evolution and needs no new variant.
+2. **Add variants, never mutate them.** Incompatible changes become new enum
+   variants; old variants stay forever (ADR-0035).
+3. **Let the compiler enforce coverage.** Exhaustive `match` in `apply()` and in
+   projectors guarantees every version is handled.
+4. **Normalize at read time, never rewrite on disk.** Stored events are
+   immutable facts.
+5. **Keep version logic in application code.** EventCore does not version,
+   migrate, or archive for you.
+6. **Capture real historical JSON in tests.** The contract is "old JSON still
+   deserializes," so test against the bytes the backend stores.
+7. **Rebuild readers together.** When you add a variant, recompile and redeploy
+   every command and projector that matches the event.
 
 ## Summary
 
-Event versioning in EventCore:
+Event versioning with EventCore:
 
-- ✅ **Explicit versioning** - Clear version tracking
-- ✅ **Migration support** - Transform between versions
-- ✅ **Compatibility checking** - Know what works together
-- ✅ **Performance monitoring** - Track version usage
-- ✅ **Testing support** - Comprehensive test patterns
+- ✅ **serde-driven** — events are JSON; deserialization follows the JSON shape
+- ✅ **Additive changes** — `#[serde(default)]` fields, no migration step
+- ✅ **Incompatible changes** — new enum variants, old variants preserved
+- ✅ **Compiler-enforced coverage** — exhaustive `match` across all versions
+- ✅ **Immutable history** — normalize in memory, never rewrite stored events
+
+What EventCore does **not** provide (and you do not need): a version registry,
+an upcasting subsystem, per-event version metadata, a versioned serializer, or
+archival APIs. Migration chains, compatibility policies, retention, and version
+metrics are application-level patterns you add only if your domain calls for
+them.
 
 Key patterns:
 
-1. Use semantic or linear versioning consistently
-2. Define clear compatibility rules
-3. Implement migration chains for complex changes
-4. Monitor version usage in production
-5. Test all migration paths thoroughly
+1. Reach for `#[serde(default)]` first; add a new variant only for incompatible
+   change.
+2. Handle every variant in `apply()` and in projectors.
+3. Emit only the latest variant from `handle()`.
+4. Persist exclusively through `execute()`; read history via `read_stream` +
+   `collect_events`.
+5. Test that historical JSON still deserializes.
 
 Next, let's explore [Long-Running Processes](./03-long-running-processes.md) →
+</content>

@@ -49,7 +49,22 @@ struct ProcessPayment {
 
 Services publish events for other services to consume:
 
+EventCore does not provide a cross-service message bus or an inter-service
+event envelope — it owns only your local event store. Everything below is
+**application-level** code that you write on top of EventCore. The
+`DistributedEvent` envelope is an application-defined wire format; EventCore
+has no `EventId`, `EventVersion`, or `EventMetadata` types (metadata is
+application-owned per EventCore's infrastructure-neutrality principle). The
+only EventCore types that appear here are `StreamId` (the validated stream
+identifier, re-exported from the `eventcore` crate) and `StreamVersion` (the
+per-stream optimistic-concurrency version, imported from `eventcore_types`,
+since the facade does not re-export it).
+
 ```rust
+use eventcore::StreamId;
+use eventcore_types::StreamVersion; // not re-exported by the eventcore facade
+use uuid::Uuid;
+
 // Application-level event publishing (not part of eventcore core)
 trait EventPublisher {
     async fn publish(&self, event: &DistributedEvent) -> Result<(), PublishError>;
@@ -58,6 +73,7 @@ trait EventPublisher {
 struct MessageBusPublisher {
     bus: MessageBus,
     topic_mapping: HashMap<String, String>,
+    service_id: String,
 }
 
 impl MessageBusPublisher {
@@ -78,26 +94,28 @@ impl MessageBusPublisher {
             metadata: event.metadata.clone(),
             occurred_at: event.occurred_at,
             published_at: Utc::now(),
-            service_id: self.service_id(),
+            service_id: self.service_id.clone(),
         };
 
         self.bus.publish(topic, &message).await?;
         Ok(())
     }
-
-    fn service_id(&self) -> String {
-        std::env::var("SERVICE_ID").unwrap_or_else(|_| "unknown".to_string())
-    }
 }
 
+// Application-defined wire envelope. EventCore does not provide this type or
+// any of its field types except StreamId and StreamVersion. The `event_id`
+// here is an application-chosen identifier (e.g. a UUID your app generates),
+// not an EventCore type — EventCore exposes positions as `StreamPosition`
+// (a UUIDv7) on events it stores, but the cross-service identifier is yours
+// to design.
 #[derive(Debug, Serialize, Deserialize)]
 struct DistributedEvent {
-    event_id: EventId,
+    event_id: Uuid,
     event_type: String,
     stream_id: StreamId,
-    version: EventVersion,
+    version: StreamVersion,
     payload: serde_json::Value,
-    metadata: EventMetadata,
+    metadata: serde_json::Value, // application-owned metadata
     occurred_at: DateTime<Utc>,
     published_at: DateTime<Utc>,
     service_id: String,
@@ -125,14 +143,22 @@ impl<S: EventStore> OrderEventHandler<S> {
             "UserRegistered" => {
                 let user_registered: UserRegisteredEvent = serde_json::from_value(event.payload)?;
 
-                // Create customer profile in order service
+                // Create customer profile in order service.
+                // StreamId is a validated nutype: construct it with the
+                // fallible `try_new`, never `StreamId::from`/`StreamId::new`
+                // (those do not exist).
                 let command = CreateCustomerProfile {
-                    customer_id: StreamId::from(format!("customer-{}", user_registered.user_id)),
+                    customer_id: StreamId::try_new(
+                        format!("customer-{}", user_registered.user_id),
+                    )?,
                     user_id: user_registered.user_id,
                     email: user_registered.email,
                     preferences: CustomerPreferences::default(),
                 };
 
+                // execute() takes the store and command by value. EventStore is
+                // implemented for &T, so passing &self.store is valid and avoids
+                // moving the handler's store.
                 execute(&self.store, command, RetryPolicy::new()).await?;
             }
             "UserUpdated" => {
@@ -140,7 +166,9 @@ impl<S: EventStore> OrderEventHandler<S> {
                 let user_updated: UserUpdatedEvent = serde_json::from_value(event.payload)?;
 
                 let command = UpdateCustomerProfile {
-                    customer_id: StreamId::from(format!("customer-{}", user_updated.user_id)),
+                    customer_id: StreamId::try_new(
+                        format!("customer-{}", user_updated.user_id),
+                    )?,
                     email: user_updated.email,
                     profile_updates: user_updated.profile_changes,
                 };
@@ -210,6 +238,21 @@ impl CommandLogic for DistributedOrderSaga {
     type State = DistributedSagaState;
     type Event = SagaEvent;
 
+    // CommandLogic requires BOTH `apply` and `handle` — neither has a default
+    // body. `apply` folds each event into the command's local state.
+    fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+        match event {
+            SagaEvent::OrderCreationRequested { .. } => state.order_created = true,
+            SagaEvent::PaymentReservationRequested { .. } => state.payment_reserved = true,
+            SagaEvent::InventoryReservationRequested { .. } => state.inventory_reserved = true,
+            SagaEvent::ShippingScheduleRequested { .. } => state.shipping_scheduled = true,
+            SagaEvent::SagaCompleted => state.completed = true,
+            SagaEvent::CompensationCompleted => state.compensation_needed = false,
+            _ => {} // compensation/cancellation events handled elsewhere
+        }
+        state
+    }
+
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if state.compensation_needed {
             self.handle_compensation(&state)
@@ -262,21 +305,26 @@ impl DistributedOrderSaga {
 }
 ```
 
-// External service integration
+The saga's `handle()` only emits _request_ events; the actual calls to other
+services are performed by an application-level client when those request
+events are projected. That client is your code, not an EventCore API:
+
+```rust
+// Application-level external service integration (not an EventCore API)
 struct ExternalServiceClient {
-http_client: reqwest::Client,
-service_url: String,
-timeout: Duration,
+    http_client: reqwest::Client,
+    service_url: String,
+    timeout: Duration,
 }
 
 impl ExternalServiceClient {
-async fn create_order(&self, order: &OrderDetails) -> Result<OrderId, ServiceError> {
-let response = self.http_client
-.post(&format!("{}/orders", self.service_url))
-.json(order)
-.timeout(self.timeout)
-.send()
-.await?;
+    async fn create_order(&self, order: &OrderDetails) -> Result<OrderId, ServiceError> {
+        let response = self.http_client
+            .post(&format!("{}/orders", self.service_url))
+            .json(order)
+            .timeout(self.timeout)
+            .send()
+            .await?;
 
         if response.status().is_success() {
             let result: CreateOrderResponse = response.json().await?;
@@ -305,19 +353,26 @@ let response = self.http_client
 
         Ok(())
     }
-
 }
+```
 
 ## Event Sourcing Across Services
 
 ### Cross-Service Projections
 
-Build projections that consume events from multiple services:
+Build projections that consume events from multiple services. The struct
+below is **application-level**: it consumes the application's
+`DistributedEvent` wire envelope (not EventCore's local `Projector` trait),
+so its `apply_event` is your own method, not `Projector::apply`. Note that
+the generic `S: EventStore` bound is required because `EventStore` is **not**
+object-safe — its `read_stream<E: Event>` method is generic, so you cannot
+store an `Arc<dyn EventStore>`. Parameterize over a concrete store type
+instead.
 
 ```rust
-struct CrossServiceOrderProjection {
+struct CrossServiceOrderProjection<S: EventStore> {
     orders: HashMap<OrderId, OrderView>,
-    event_store: Arc<dyn EventStore>,
+    event_store: S,
     user_service_client: UserServiceClient,
     payment_service_client: PaymentServiceClient,
 }
@@ -334,8 +389,9 @@ struct OrderView {
     updated_at: DateTime<Utc>,
 }
 
-// Cross-service projection handling
-impl CrossServiceOrderProjection {
+// Cross-service projection handling (application-level; consumes the
+// application's DistributedEvent envelope, not EventCore's Projector trait)
+impl<S: EventStore> CrossServiceOrderProjection<S> {
     async fn apply_event(&mut self, event: &DistributedEvent) -> Result<(), ProjectionError> {
         match event.event_type.as_str() {
             "OrderCreated" => {
@@ -664,7 +720,11 @@ impl<S: EventStore> DistributedExecutor<S> {
         match execute(&self.store, command, RetryPolicy::new()).await {
             Ok(result) => {
                 span.set_attribute("command.success", true);
-                span.set_attribute("events.written", result.events_written.len() as i64);
+                // ExecutionResponse exposes only `attempts()` — the number of
+                // tries before the command committed (1 = first-try success,
+                // >1 = optimistic-concurrency retries). It does NOT surface the
+                // written events, versions, or streams.
+                span.set_attribute("command.attempts", i64::from(result.attempts()));
                 Ok(result)
             }
             Err(e) => {
@@ -697,6 +757,41 @@ impl From<(&DistributedEvent, &SpanContext)> for TracedDistributedEvent {
 ```
 
 ### Metrics Collection
+
+EventCore does not ship a metrics registry, exporter, or `monitoring` module —
+there is no built-in telemetry subsystem. The library exposes exactly one
+observability seam: the `MetricsHook` trait, which you attach to a
+`RetryPolicy` via `RetryPolicy::with_metrics_hook(...)`. EventCore calls
+`MetricsHook::on_retry_attempt(&RetryContext)` whenever a command is retried
+after an optimistic-concurrency conflict. Everything else (command counts,
+durations, lag gauges, exporters) is **application-owned** instrumentation
+that you build around `execute()`.
+
+A minimal EventCore-provided hook that feeds your own metrics:
+
+```rust
+use eventcore::{MetricsHook, RetryContext, RetryPolicy};
+
+struct PrometheusRetryHook {
+    retries_total: prometheus::Counter,
+}
+
+impl MetricsHook for PrometheusRetryHook {
+    fn on_retry_attempt(&self, _ctx: &RetryContext) {
+        self.retries_total.inc();
+    }
+}
+
+// Wire it in when executing a command:
+let policy = RetryPolicy::new()
+    .max_retries(5)
+    .with_metrics_hook(PrometheusRetryHook { retries_total });
+// execute(&store, command, policy).await?;
+```
+
+The remaining metrics below are entirely application-level — they wrap your
+own calls to `execute()` and your own event publishing/consumption code, and
+use the `prometheus` crate directly:
 
 ```rust
 use prometheus::{Counter, Histogram, Gauge, Registry};
@@ -848,9 +943,10 @@ mod distributed_tests {
         // Setup event routing
         let event_hub = EventFederationHub::new(&kafka_container);
 
-        // Execute distributed saga
+        // Execute distributed saga. StreamId is a validated nutype with no
+        // no-arg constructor — build it with `try_new` and a concrete id.
         let saga = DistributedOrderSaga {
-            saga_id: StreamId::new(),
+            saga_id: StreamId::try_new("saga-123").expect("valid stream id"),
             order_details: create_test_order(),
             customer_id: create_test_customer(&user_service).await,
         };

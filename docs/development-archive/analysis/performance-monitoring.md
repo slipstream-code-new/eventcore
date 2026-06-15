@@ -1,5 +1,7 @@
 # Performance Monitoring and Alerting Guide
 
+> Historical (archived). The `eventcore::monitoring` subsystem (`MetricsRegistry`, `SystemMetrics`, `CommandTracer`, built-in exporters) and the `EventToWrite` / `write_events_multi` APIs described here are not part of the current public API. For current metrics integration see the `MetricsHook` trait and `RetryPolicy::with_metrics_hook`. Kept for historical reference only.
+
 This guide covers comprehensive performance monitoring, alerting strategies, and observability best practices for EventCore applications.
 
 ## Overview

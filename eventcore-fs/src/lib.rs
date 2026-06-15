@@ -19,11 +19,14 @@
 //! - `config` — store configuration and the on-disk directory layout
 //! - `format` — the immutable JSONL transaction-file format (ADR-0038)
 //! - `index` — the in-memory read model and linearization engine (ADR-0039)
+//! - `ingestion` — per-replica local-ingestion order backing the EventReader
+//!   cursor (ADR-0043(c))
 //! - `merge` — fork detection and reconciliation types (ADR-0041/0042)
+//! - `replica` — fingerprint-bound, machine-local replica identity (ADR-0044)
 //! - `coordination` — locking, checkpoints, and projector coordination
 //!   (ADR-0040)
 //!
-//! See ADRs 0038–0046 and the `fs-merge-mode` blueprint for the full design.
+//! See ADRs 0038–0047 and the `fs-merge-mode` blueprint for the full design.
 
 mod config;
 mod coordination;

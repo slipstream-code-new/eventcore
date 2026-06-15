@@ -33,7 +33,7 @@ Offline-first collaboration on an event-sourced domain with no server, no online
 
 - **Value** — _Will anyone want this?_ The bet is that local-first / git-backed tooling is a real and growing niche and that "your event log is just files in your repo" is a compelling story for it. The capability is purely additive: a user who never merges offline-divergent histories never pays for merge mode, so the downside of being wrong is low. Mitigation: ship Layer 1 (single-writer file backend) standalone first; merge mode is opt-in surface on top.
 - **Usability** — _Can a developer actually use it?_ Reconciliation is expressed as something the developer already knows: a command whose `handle()` produces events. The library hands over a fully-folded `ForkContext` (ancestor state + per-branch events + affected streams); the developer does not touch the DAG, linearization, or version arithmetic. The principal usability hazard is the _idempotence constraint_ on reconciliation commands (see Projection Contract). Mitigation: make the constraint explicit and documented, and provide a topology-generation rebuild safety net for authors who cannot satisfy it.
-- **Feasibility** — _Can it be built deterministically?_ Yes, and the mechanism is shared with Layer 1. A single read-time-linearization path builds a transaction DAG from recorded parent pointers, topologically sorts it, and breaks ties between concurrent transactions with the immutable triple `(created_at, replica_id, transaction_id)`. All inputs are recorded immutable values, so the sort is a pure function of the file set. The residual feasibility risk is _resolver determinism_: convergence of merge _content_ requires a `ForkResolver` to be a pure function of its `ForkContext`. A non-deterministic resolver merely produces a further reconcilable fork — it degrades, it does not corrupt.
+- **Feasibility** — _Can it be built deterministically?_ Yes, and the mechanism is shared with Layer 1. A single read-time-linearization path builds a transaction DAG from recorded parent pointers, topologically sorts it, and breaks ties between concurrent transactions with the immutable triple `(created_at, replica_id, transaction_id)`. All inputs are recorded immutable values, so the sort is a pure function of the file set. The residual feasibility risk is _resolver determinism_: convergence of merge _content_ requires the resolver (a `Fn(&ForkContext<E>) -> ResolutionOutcome<E>`) to be a pure function of its `ForkContext`. A non-deterministic resolver merely produces a further reconcilable fork — it degrades, it does not corrupt.
 - **Viability** — _Should we own this long-term?_ Merge mode is off-trait and crate-local to `eventcore-fs`, so it imposes zero maintenance burden on the postgres/sqlite/memory backends or the shared trait vocabulary. Its on-disk format reserves the merge header fields from Layer 1 day one, so adopting merge mode never forces an on-disk migration. The cost is bounded and isolated; the strategic upside (a differentiated local-first capability) is meaningful.
 
 ### Non-Goals
@@ -83,27 +83,35 @@ One file per transaction, UUID7-derived filenames that never collide, and an abs
 Merge mode is fs-specific, off-trait API on the file store:
 
 ```rust
-fn detect_forks(&self) -> Vec<Fork>;
-fn reconcile<R: ForkResolver>(&self, resolver: R) -> ReconcileReport;
-fn status(&self) -> StoreStatus;
+fn detect_forks(&self) -> Result<Vec<Fork>, FsEventStoreError>;
+async fn reconcile<E, R>(&self, resolver: R) -> Result<ReconcileReport, FsEventStoreError>
+where
+    E: Event,
+    R: Fn(&ForkContext<E>) -> ResolutionOutcome<E>;
+fn status(&self) -> Result<StoreStatus, FsEventStoreError>;
 ```
 
 The reconciliation flow keeps the domain in charge:
 
-1. **Detect.** The library finds a fork: a set of fork-head transactions that diverged from a common point on one or more streams.
-2. **Compute ancestor state.** The library finds the lowest common ancestor (LCA) in the DAG and folds events up to the fork point using the **application's own `apply()`** to produce `ancestor_state`. The application's write-model logic is reused; the library supplies no fold of its own.
-3. **Hand over the fork.** The library passes the application a `ForkContext`:
+1. **Detect.** The library finds a fork: two or more concurrent transactions that each extended a single stream from the same `base_version`.
+2. **Locate the fork point.** The library finds the version both branches built on before diverging — surfaced as the `base_version` on the `ForkContext`. The divergent events each branch contributed after that point are what the resolver inspects; the library supplies no fold of its own and leaves write-model logic to the application.
+3. **Hand over the fork.** The library passes the application a `ForkContext<E>`, one per forked stream:
 
    ```rust
-   struct ForkContext<State, Event> {
-       ancestor_state: State,
-       branches: Vec<Branch<Event>>,   // one per fork head: { replica_id, events }
-       affected_streams: Vec<StreamId>,
+   struct ForkContext<E> {
+       stream_id: StreamId,             // accessor: stream_id() -> &StreamId
+       base_version: StreamVersion,     // accessor: base_version() -> StreamVersion
+       branches: Vec<BranchView<E>>,    // accessor: branches() -> &[BranchView<E>]
+   }
+
+   struct BranchView<E> {
+       transaction_id: TransactionId,   // accessor: transaction_id() -> TransactionId
+       events: Vec<E>,                  // accessor: events() -> &[E]
    }
    ```
 
-4. **Resolve as a command.** The `ForkResolver` returns a resolution **as a command to run** — never as raw events. The command's `handle()` produces the compensation/merge events, honoring the eventcore command pattern (typed state, pure `handle`, stream declarations). A multi-stream fork is presented as a single unit (the atomic transaction is the fork unit) and resolved by one multi-stream merge command.
-5. **Record the merge.** The library appends an immutable **merge transaction** whose header lists _all_ fork-head transactions in `parent_transaction_ids` — a true N-parent merge node — and whose events are those produced by the resolution command's `handle()`. Nothing is edited or deleted; the divergent transactions remain in place as historical fact, now joined beneath a merge node.
+4. **Resolve to events.** The resolver — a `Fn(&ForkContext<E>) -> ResolutionOutcome<E>` — returns `ResolutionOutcome::Resolve(Vec<E>)` carrying the compensation/merge events its domain logic produced, or `ResolutionOutcome::Unresolvable(reason)`. The resolved events are the application's own domain events; the library records them as the merge transaction's payload. Each fork is presented per-stream, and the resolver owns the merge policy (ADR-0042).
+5. **Record the merge.** The library appends an immutable **merge transaction** whose header lists _all_ fork-head transactions in `parent_transaction_ids` — a true N-parent merge node — and whose events are those returned in `ResolutionOutcome::Resolve(Vec<E>)`. Nothing is edited or deleted; the divergent transactions remain in place as historical fact, now joined beneath a merge node.
 
 `ResolutionOutcome::Unresolvable(reason)` is a first-class outcome. When the resolver declines (e.g., a genuine conflict needing a human, or schema-version skew between replicas), both branches stay in place, no merge node is recorded, and the affected stream is surfaced as in-conflict via `status()`. Merge mode never silently picks a winner.
 
@@ -113,7 +121,7 @@ The reconciliation flow keeps the domain in charge:
 
 A merge can insert causally-_earlier_ events behind a projection's checkpoint — the `EventReader` UUID7 cursor can be outrun by a reconciliation that linearizes new events ahead of where a projection has already read. The contract that keeps projections correct combines three layers:
 
-- **(a) Compensating head events (the default).** Reconciliation expresses its outcome as new _head_ events (the compensation/merge events produced by the resolution command). A caught-up, cursor-based projection moves forward past those new heads and is corrected by them. The diverged history is not rewritten; the _correction_ is appended ahead.
+- **(a) Compensating head events (the default).** Reconciliation expresses its outcome as new _head_ events (the compensation/merge events the resolver returns in `ResolutionOutcome::Resolve`). A caught-up, cursor-based projection moves forward past those new heads and is corrected by them. The diverged history is not rewritten; the _correction_ is appended ahead.
 - **(c) Per-replica local-ingestion cursor.** Cursor progress is tracked in each replica's _local ingestion order_, so a live projection never rewinds when a merge inserts causally-earlier events. The **canonical linearized order** governs state and version assignment; the **local ingestion order** governs cursor advancement. These are deliberately separate: convergence needs the canonical order, liveness needs the monotonic local order.
 
   Concretely on the file store: `EventReader::read_events` (the projection/cursor path) delivers events in **local-ingestion order** and the `StreamPosition` it returns is a local-ingestion position — a per-replica monotonic sequence the store assigns the first time it sees each event and persists in the gitignored `index/` directory. A merge-introduced transaction is new to this replica, so it receives a fresh sequence larger than any prior position; the cursor advances forward to cover it and never rewinds. Because these positions are per-replica, two clones legitimately return events in different orders and with different positions from `read_events`; a checkpoint is meaningful only on the replica that produced it (it is gitignored and rebuildable). The convergent, cross-replica-identical view is `EventStore::read_stream`, which returns a stream's events in **canonical linearized order**.
@@ -145,21 +153,21 @@ Given replica A and replica B both start from the same committed history
 When the events/ directories are union-merged into each clone
   And detect_forks() is called on each clone
 Then each clone reports exactly one fork on account-1 with both transactions as heads
-When a deterministic ForkResolver reconciles the fork on each clone independently
+When a deterministic resolver reconciles the fork on each clone independently
 Then each clone records an N-parent merge transaction
   And both clones independently linearize to byte-identical state and version assignments
 ```
 
-### Multi-stream fork resolved atomically
+### Multi-stream offline transaction surfaces a fork per stream
 
 ```
 Given a single offline transaction on each replica wrote to account-1 and account-2
   And both transactions share stream_bases for account-1 and account-2 with no ancestor relation
 When the histories are union-merged and detect_forks() is called
-Then the fork is presented as one unit listing affected_streams = [account-1, account-2]
-When a single multi-stream merge command resolves the fork
-Then one merge transaction is recorded spanning both streams atomically
-  And no partial reconciliation (one stream merged, the other not) is ever observable
+Then a fork is reported for account-1 and a fork is reported for account-2
+When the resolver returns ResolutionOutcome::Resolve for each fork
+Then a merge transaction is recorded for each resolved fork
+  And every clone linearizes to byte-identical state and version assignments
 ```
 
 ### Recursive merge-of-merges converges and terminates
@@ -218,7 +226,7 @@ Then the second projection rebuilds from zero against the canonical linearized o
 - ADR-0039: Read-Time Linearization and `StreamVersion` as Projection — the shared topological-sort-with-tiebreak linearization path.
 - ADR-0040: File-Store Locking and Projector Coordination — in-process append mutex, cross-process store lock, advisory-lock coordination.
 - ADR-0041: Merge Causality via Transaction DAG — parent pointers + per-stream `base_version`/`base_state_hash` as the causality model.
-- ADR-0042: Domain-Owned Reconciliation API — `ForkResolver` returning a command; library records an N-parent merge transaction.
+- ADR-0042: Domain-Owned Reconciliation API — a domain-supplied resolver (`Fn(&ForkContext<E>) -> ResolutionOutcome<E>`) returning resolution events; library records an N-parent merge transaction.
 - ADR-0043: Projection Behavior After Structural Merge — compensating head events, per-replica local-ingestion cursor, topology-generation rebuild, and the app-author idempotence constraint.
 - ADR-0044: Replica Identity for Merge Mode — machine-local, gitignored, lazily-on-write identity with copy-trap fingerprinting and collision detection.
 - ADR-0045: Merge Mode Outside the `EventStore` Trait — the off-trait, fs-specific API surface.

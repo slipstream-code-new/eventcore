@@ -325,7 +325,7 @@ impl ProjectorCoordinator for InMemoryEventStore {
 /// use eventcore_memory::InMemoryCheckpointStore;
 ///
 /// let checkpoint_store = InMemoryCheckpointStore::new();
-/// // Use with ProjectionRunner
+/// // Implements CheckpointStore for tracking projection progress.
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryCheckpointStore {

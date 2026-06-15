@@ -5,14 +5,116 @@ Query endpoints serve read requests from your projections. Unlike commands that 
 ## Query Architecture
 
 ```
-HTTP Request → Authenticate → Authorize → Query Projection → Format Response
+HTTP Request → Authenticate → Authorize → Query Read Model → Format Response
                                                 ↑
-                                         Read Model Store
+                                  Read Model (kept current by a Projector)
 ```
+
+## Where EventCore Ends and Your Application Begins
+
+EventCore owns the _write_ side and the machinery that keeps read models
+current. It does **not** ship a query/registry layer for your HTTP handlers.
+Two things matter for this chapter:
+
+1. **EventCore's read API is a `Projector` driven by `run_projection`.** Your
+   projector consumes events in order and writes whatever read model your
+   queries need (a SQL table, a search index, an in-memory map, etc.). EventCore
+   re-exports everything you need for this from the crate root:
+   `eventcore::{Projector, run_projection, ProjectionConfig, StreamPosition,
+FailureStrategy, FailureContext}`.
+
+2. **The read store and the query methods on it are _your_ code.** The
+   `AppState`, projection registries, `SearchQuery` builders, and the
+   `get_all_tasks()` / `search()` / `calculate_statistics()` methods used by the
+   handlers below are **application-level** examples — they are how _your_
+   service exposes the read model your projector built. They are not EventCore
+   APIs, and EventCore imposes no particular shape on them.
+
+### The real EventCore read path
+
+A projector turns the event log into whatever read model your queries serve.
+EventCore calls `apply` for each event in stream-position order and persists a
+checkpoint so it can resume:
+
+```rust
+use eventcore::{
+    FailureContext, FailureStrategy, Projector, ProjectionConfig,
+    StreamPosition, run_projection,
+};
+
+// Application-level read model the HTTP handlers will query.
+#[derive(Default)]
+struct TaskListReadModel {
+    // ... your storage: a HashMap, a SQL pool, a search index, etc.
+}
+
+struct TaskListProjector {
+    name: String,
+    // a handle to where the read model is stored
+}
+
+impl Projector for TaskListProjector {
+    type Event = TaskEvent;        // your domain event enum
+    type Error = TaskProjectionError;
+    type Context = TaskListReadModel;
+
+    fn apply(
+        &mut self,
+        event: Self::Event,
+        _position: StreamPosition,
+        ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        // Update your read model from the event. New domain facts become
+        // new enum variants over time; match them all so old projectors keep
+        // compiling and unknown-but-additive fields use serde defaults.
+        match event {
+            TaskEvent::Created { .. } => { /* insert into read model */ }
+            TaskEvent::StatusChanged { .. } => { /* update read model */ }
+            // ...
+        }
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    // Optional: decide what happens when apply() fails for one event.
+    fn on_error(&mut self, _ctx: FailureContext<'_, Self::Error>) -> FailureStrategy {
+        FailureStrategy::Fatal // the default; Skip and Retry are also available
+    }
+}
+
+// Drive the projector. `backend` is any store that implements the reader and
+// checkpoint contracts (the memory, sqlite, postgres, or fs backends).
+// Default config is batch mode (process everything available, then stop);
+// `.continuous()` keeps polling for new events.
+async fn keep_read_model_current<B>(backend: &B) -> Result<(), eventcore::ProjectionError>
+where
+    B: eventcore_types::EventReader
+        + eventcore_types::CheckpointStore
+        + eventcore_types::ProjectorCoordinator,
+{
+    let projector = TaskListProjector { name: "task-list".to_string() };
+    let config = ProjectionConfig::default().continuous();
+    run_projection(projector, backend, config).await
+}
+```
+
+Everything from here down is the _query_ side: HTTP handlers reading the model
+your projector maintains. The exact storage and query methods are yours to
+design — the examples use plausible application-level types so the patterns are
+concrete.
 
 ## Basic Query Pattern
 
 ### Simple Query Endpoint
+
+> **Application-level code.** The handler below reads from a read model your
+> projector maintains (see the section above). `AppState`, the `read_models`
+> accessor, and `get_all_tasks()` are example application types — not EventCore
+> APIs. EventCore's only involvement here is having kept the read model current
+> via `run_projection`.
 
 ```rust
 use axum::{
@@ -67,15 +169,12 @@ async fn list_tasks(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<ListTasksQuery>,
 ) -> Result<Json<ListTasksResponse>, ApiError> {
-    // Get projection
-    let projection = state.projections
-        .read()
-        .await
-        .get::<TaskListProjection>()
-        .ok_or_else(|| ApiError::internal("Task projection not available"))?;
+    // Read from the application's read model (maintained by a Projector via
+    // run_projection). `read_models` and `task_list()` are app-level accessors.
+    let read_model = state.read_models.task_list();
 
     // Apply filters
-    let mut tasks = projection.get_all_tasks();
+    let mut tasks = read_model.get_all_tasks();
 
     if let Some(status) = query.status {
         tasks.retain(|t| t.status == status);
@@ -109,6 +208,12 @@ async fn list_tasks(
 ## Advanced Query Patterns
 
 ### Filtering and Sorting
+
+> **Application-level code.** `SearchQuery`, the builder methods, and
+> `read_model.search()` are illustrative application types showing how a
+> read model _you_ designed might expose rich filtering. EventCore does not
+> provide a query DSL — it provides the `Projector`/`run_projection` machinery
+> that keeps the model your queries read from up to date.
 
 ```rust
 #[derive(Debug, Deserialize)]
@@ -169,11 +274,8 @@ async fn search_tasks(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<AdvancedTaskQuery>,
 ) -> Result<Json<CursorPaginatedResponse<TaskSummary>>, ApiError> {
-    let projection = state.projections
-        .read()
-        .await
-        .get::<TaskSearchProjection>()
-        .ok_or_else(|| ApiError::internal("Search projection not available"))?;
+    // App-level accessor for the search read model your projector populates.
+    let read_model = state.read_models.task_search();
 
     // Build query
     let mut search_query = SearchQuery::new();
@@ -214,14 +316,19 @@ async fn search_tasks(
 
     search_query = search_query.limit(query.limit);
 
-    // Execute query
-    let results = projection.search(search_query).await?;
+    // Execute query against the read model
+    let results = read_model.search(search_query).await?;
 
     Ok(Json(results))
 }
 ```
 
 ### Aggregation Queries
+
+> **Application-level code.** Aggregations live in read models you design and
+> keep current with a `Projector`. A common pattern is a dedicated analytics
+> projector whose `apply` increments counters/rollups as events arrive, so the
+> HTTP handler just reads a precomputed result.
 
 ```rust
 #[derive(Debug, Serialize)]
@@ -247,13 +354,10 @@ async fn get_task_statistics(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<DateRangeQuery>,
 ) -> Result<Json<TaskStatistics>, ApiError> {
-    let projection = state.projections
-        .read()
-        .await
-        .get::<TaskAnalyticsProjection>()
-        .ok_or_else(|| ApiError::internal("Analytics projection not available"))?;
+    // App-level analytics read model populated by an analytics projector.
+    let read_model = state.read_models.task_analytics();
 
-    let stats = projection.calculate_statistics(
+    let stats = read_model.calculate_statistics(
         query.start_date,
         query.end_date,
     ).await?;
@@ -279,13 +383,10 @@ async fn get_task_completion_trend(
     State(state): State<AppState>,
     QueryParams(query): QueryParams<TimeSeriesQuery>,
 ) -> Result<Json<TimeSeriesData>, ApiError> {
-    let projection = state.projections
-        .read()
-        .await
-        .get::<TaskMetricsProjection>()
-        .ok_or_else(|| ApiError::internal("Metrics projection not available"))?;
+    // App-level time-series read model populated by a metrics projector.
+    let read_model = state.read_models.task_metrics();
 
-    let data = projection.get_completion_trend(
+    let data = read_model.get_completion_trend(
         query.start_date,
         query.end_date,
         query.granularity,
@@ -297,7 +398,10 @@ async fn get_task_completion_trend(
 
 ## GraphQL Integration
 
-For complex queries, GraphQL can be more efficient:
+For complex queries, GraphQL can be more efficient. As before, the `TaskProjection`
+/ `UserProjection` types injected into the GraphQL context are **application-level
+read models** — your code, kept current by a `Projector`. EventCore is not part
+of the GraphQL layer; it only maintained the read models these resolvers query.
 
 ```rust
 use async_graphql::{
@@ -364,7 +468,7 @@ async fn graphql_handler(
     req: GraphQLRequest,
 ) -> GraphQLResponse {
     let schema = Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
-        .data(state.projections.clone())
+        .data(state.read_models.clone())
         .data(user)
         .finish();
 
@@ -451,13 +555,9 @@ async fn get_public_statistics(
             stale_while_revalidate: Duration::from_secs(60),
         },
         || async {
-            let projection = state.projections
-                .read()
-                .await
-                .get::<PublicStatsProjection>()
-                .ok_or_else(|| ApiError::internal("Stats not available"))?;
-
-            projection.get_current_stats().await
+            // App-level read model populated by a public-stats projector.
+            let read_model = state.read_models.public_stats();
+            read_model.get_current_stats().await
         },
     ).await
 }
@@ -532,7 +632,14 @@ impl QueryCache {
 
 ## Real-time Queries with SSE
 
-Server-Sent Events for live updates:
+Server-Sent Events for live updates. EventCore does not provide a push/subscribe
+API — the closest mechanism is a **continuous** projection
+(`ProjectionConfig::default().continuous()`), which keeps polling for new events
+and applying them to your read model. To stream updates to clients, have your
+projector (or the read model it writes to) publish change notifications on a
+channel your SSE handler subscribes to. The `subscribe_to_updates` method below
+is **application-level** — it is your read model's notification API, not an
+EventCore API.
 
 ```rust
 use axum::response::sse::{Event, Sse};
@@ -544,11 +651,11 @@ async fn task_updates_stream(
     user: AuthenticatedUser,
 ) -> Sse<impl Stream<Item = Result<Event, ApiError>>> {
     let stream = async_stream::stream! {
-        let mut subscription = state.projections
-            .read()
-            .await
-            .get::<TaskProjection>()
-            .unwrap()
+        // App-level: subscribe to change notifications published by the read
+        // model (which a continuous projector keeps current). EventCore has no
+        // built-in subscription API; this is your service's notification layer.
+        let mut subscription = state.read_models
+            .task_list()
             .subscribe_to_updates(user.id)
             .await;
 
@@ -588,6 +695,10 @@ async fn task_updates_stream(
 ## Query Performance Optimization
 
 ### N+1 Query Prevention
+
+The `TaskProjection` here is the same application-level read model used
+throughout this chapter; the batching advice applies to whatever storage backs
+it.
 
 ```rust
 // Bad: N+1 queries
@@ -858,7 +969,10 @@ mod tests {
 
 ## Best Practices
 
-1. **Use projections** - Don't query event streams directly
+1. **Read from purpose-built read models** - Drive them with a `Projector` +
+   `run_projection`. Direct event reads exist (`EventStore::read_stream` plus the
+   `collect_events` helper), but they replay raw history and are best reserved
+   for tests, debugging, or building a projection — not for serving queries.
 2. **Paginate results** - Never return unbounded lists
 3. **Cache aggressively** - Read queries are perfect for caching
 4. **Validate query parameters** - Prevent resource exhaustion
@@ -871,15 +985,21 @@ mod tests {
 
 Query endpoints in EventCore applications:
 
-- ✅ **Projection-based** - Read from optimized projections
-- ✅ **Performant** - Caching and optimization built-in
+- ✅ **Read-model-based** - Serve queries from read models a `Projector` keeps
+  current via `run_projection`, not from raw event streams
+- ✅ **Performant** - Caching and optimization live in your application layer
 - ✅ **Flexible** - Support REST, GraphQL, and real-time
-- ✅ **Secure** - Authorization and rate limiting
+- ✅ **Secure** - Authorization and rate limiting (your application's concern)
 - ✅ **Testable** - Easy to test in isolation
+
+Remember the boundary: EventCore supplies the `Projector` / `run_projection` /
+`ProjectionConfig` machinery and the underlying event store. The read-model
+storage, query methods, registries, caching, and HTTP handlers shown here are
+application-level code — EventCore imposes no shape on them.
 
 Key patterns:
 
-1. Read from projections, not event streams
+1. Read from read models (built by projectors), not raw event streams
 2. Implement proper pagination
 3. Cache responses appropriately
 4. Validate and limit query complexity

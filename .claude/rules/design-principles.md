@@ -21,7 +21,7 @@ Public entry points are free functions with explicit dependencies:
 
 ```rust
 execute(store, command, policy)
-run_projection(projector, &backend)
+run_projection(projector, &backend, config)
 ```
 
 Prefer this pattern over builder structs or intermediate types. Structs exist

@@ -100,7 +100,7 @@ let email = Email::try_new("john@example.com")
 Validate business rules in commands:
 
 ```rust
-use eventcore::{Command, CommandError, require};
+use eventcore::{CommandLogic, CommandError, NewEvents};
 
 #[derive(Debug, Clone)]
 struct TransferMoney {

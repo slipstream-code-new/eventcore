@@ -55,22 +55,25 @@ Ergonomic early-return for business rule validation in `handle()` methods:
 require!(balance >= amount, "insufficient-funds");
 // Expands to:
 if !(balance >= amount) {
-    return Err(CommandError::BusinessRuleViolation("insufficient-funds".to_string()));
+    return Err(Into::<CommandError>::into("insufficient-funds"));
 }
 ```
 
+The error argument is anything implementing `Into<CommandError>`. Typed error
+enums (with a `From<MyError> for CommandError` impl) are preferred over string
+literals.
+
 Supports format strings: `require!(cond, "need {}, have {}", need, have)`
 
-### `emit!` Macro
-
-Type-safe event emission within command handlers (used with the `NewEvents` builder pattern).
+Events are produced by returning `NewEvents` from `handle()`; there is no
+`emit!` macro.
 
 ## Files
 
 | File                                                  | Description                                    |
 | ----------------------------------------------------- | ---------------------------------------------- |
 | `eventcore-macros/src/lib.rs`                         | `#[derive(Command)]` proc macro implementation |
-| `eventcore/src/lib.rs`                                | `require!` macro definition (lines 102-120)    |
+| `eventcore/src/lib.rs`                                | `require!` macro definition                    |
 | `eventcore-macros/tests/trybuild.rs`                  | Compile-time error test harness                |
 | `eventcore-macros/tests/command_macro.rs`             | Compile-time coverage tests                    |
 | `eventcore-macros/tests/command_derive_macro_test.rs` | Runtime integration tests                      |
