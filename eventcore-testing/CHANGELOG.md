@@ -3,11 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1.html).
 
 ## [Unreleased]
 
-## [2.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-testing-v1.0.0...eventcore-testing-v2.0.0) - 2026-06-15
+## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-testing-v1.0.0...eventcore-testing-v1.0.1) - 2026-06-15
 
 ### Documentation
 
@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-- *(eventcore-types)* glob pattern matching for subscriptions ([#246](https://git.johnwilger.com/Slipstream/eventcore/pulls/246)) ([#410](https://git.johnwilger.com/Slipstream/eventcore/pulls/410))
-- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+- _(eventcore-types)_ glob pattern matching for subscriptions ([#246](https://git.johnwilger.com/Slipstream/eventcore/pulls/246)) ([#410](https://git.johnwilger.com/Slipstream/eventcore/pulls/410))
+- _(eventcore)_ [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
 
 ### Miscellaneous Tasks
 
@@ -33,8 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deps
 
-- *(deps)* bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
-- *(deps)* bump nutype from 0.6.2 to 0.7.0 ([#381](https://git.johnwilger.com/Slipstream/eventcore/pulls/381))
+- _(deps)_ bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
+- _(deps)_ bump nutype from 0.6.2 to 0.7.0 ([#381](https://git.johnwilger.com/Slipstream/eventcore/pulls/381))
 
 ## [0.7.1](https://github.com/jwilger/eventcore/compare/eventcore-testing-v0.7.0...eventcore-testing-v0.7.1) - 2026-04-15
 
@@ -84,35 +84,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-- *(testing)* contract-first CheckpointStore with unified backend verification ([#234](https://github.com/jwilger/eventcore/pull/234))
+- _(testing)_ contract-first CheckpointStore with unified backend verification ([#234](https://github.com/jwilger/eventcore/pull/234))
 
 ### Refactoring
 
-- *(testing)* unify contract test macros into backend_contract_tests! ([#233](https://github.com/jwilger/eventcore/pull/233))
+- _(testing)_ unify contract test macros into backend_contract_tests! ([#233](https://github.com/jwilger/eventcore/pull/233))
 
 ## [0.3.0](https://github.com/jwilger/eventcore/compare/eventcore-testing-v0.2.0...eventcore-testing-v0.3.0) - 2025-12-27
 
 ### Refactoring
 
 - eliminate primitive obsession across configuration structs ([#216](https://github.com/jwilger/eventcore/pull/216))
-- *(release)* switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
+- _(release)_ switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
 
 ## [0.2.0](https://github.com/jwilger/eventcore/releases/tag/v0.2.0) - 2025-12-26
 
 ### Features
 
-- *(postgres)* add PostgreSQL event store implementation ([#169](https://github.com/jwilger/eventcore/pull/169))
-- *(projection)* implement EventReader contract tests ([#193](https://github.com/jwilger/eventcore/pull/193))
-- *(testing)* create unified event_store_suite! macro ([#194](https://github.com/jwilger/eventcore/pull/194))
+- _(postgres)_ add PostgreSQL event store implementation ([#169](https://github.com/jwilger/eventcore/pull/169))
+- _(projection)_ implement EventReader contract tests ([#193](https://github.com/jwilger/eventcore/pull/193))
+- _(testing)_ create unified event_store_suite! macro ([#194](https://github.com/jwilger/eventcore/pull/194))
 
 ### Miscellaneous Tasks
 
-- *(testing)* move chaos harness into dev crate ([#167](https://github.com/jwilger/eventcore/pull/167))
+- _(testing)_ move chaos harness into dev crate ([#167](https://github.com/jwilger/eventcore/pull/167))
 - align all workspace crate versions to 0.2.0 ([#198](https://github.com/jwilger/eventcore/pull/198))
 
 ### Refactoring
 
-- *(store)* replace mutex unwrap with proper error handling ([#179](https://github.com/jwilger/eventcore/pull/179))
+- _(store)_ replace mutex unwrap with proper error handling ([#179](https://github.com/jwilger/eventcore/pull/179))
 - reorganize workspace per ADR-022 for feature flag re-exports ([#188](https://github.com/jwilger/eventcore/pull/188))
 - extract InMemoryEventStore into separate eventcore-memory crate ([#196](https://github.com/jwilger/eventcore/pull/196))
-- *(types)* use UUID7 event IDs as global positions ([#197](https://github.com/jwilger/eventcore/pull/197))
+- _(types)_ use UUID7 event IDs as global positions ([#197](https://github.com/jwilger/eventcore/pull/197))

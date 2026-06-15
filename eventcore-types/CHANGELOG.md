@@ -3,11 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1.html).
 
 ## [Unreleased]
 
-## [2.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-types-v1.0.0...eventcore-types-v2.0.0) - 2026-06-15
+## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-types-v1.0.0...eventcore-types-v1.0.1) - 2026-06-15
 
 ### Documentation
 
@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-- *(eventcore-types)* glob pattern matching for subscriptions ([#246](https://git.johnwilger.com/Slipstream/eventcore/pulls/246)) ([#410](https://git.johnwilger.com/Slipstream/eventcore/pulls/410))
-- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+- _(eventcore-types)_ glob pattern matching for subscriptions ([#246](https://git.johnwilger.com/Slipstream/eventcore/pulls/246)) ([#410](https://git.johnwilger.com/Slipstream/eventcore/pulls/410))
+- _(eventcore)_ [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
 
 ### Performance
 
@@ -34,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deps
 
-- *(deps)* bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
-- *(deps)* bump nutype from 0.6.2 to 0.7.0 ([#381](https://git.johnwilger.com/Slipstream/eventcore/pulls/381))
+- _(deps)_ bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
+- _(deps)_ bump nutype from 0.6.2 to 0.7.0 ([#381](https://git.johnwilger.com/Slipstream/eventcore/pulls/381))
 
 ## [0.7.1](https://github.com/jwilger/eventcore/compare/eventcore-types-v0.7.0...eventcore-types-v0.7.1) - 2026-04-15
 
@@ -87,22 +87,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-- *(eventcore-postgres)* add database triggers to enforce event log immutability ([#229](https://github.com/jwilger/eventcore/pull/229))
-- *(testing)* contract-first CheckpointStore with unified backend verification ([#234](https://github.com/jwilger/eventcore/pull/234))
+- _(eventcore-postgres)_ add database triggers to enforce event log immutability ([#229](https://github.com/jwilger/eventcore/pull/229))
+- _(testing)_ contract-first CheckpointStore with unified backend verification ([#234](https://github.com/jwilger/eventcore/pull/234))
 
 ## [0.3.0](https://github.com/jwilger/eventcore/compare/eventcore-types-v0.2.0...eventcore-types-v0.3.0) - 2025-12-27
 
 ### Refactoring
 
 - eliminate primitive obsession across configuration structs ([#216](https://github.com/jwilger/eventcore/pull/216))
-- *(release)* switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
+- _(release)_ switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
 
 ## [0.2.0](https://github.com/jwilger/eventcore/releases/tag/v0.2.0) - 2025-12-26
 
 ### Features
 
-- *(projection)* implement poll-based projection runner with error handling ([#190](https://github.com/jwilger/eventcore/pull/190))
-- *(projection)* implement EventReader contract tests ([#193](https://github.com/jwilger/eventcore/pull/193))
+- _(projection)_ implement poll-based projection runner with error handling ([#190](https://github.com/jwilger/eventcore/pull/190))
+- _(projection)_ implement EventReader contract tests ([#193](https://github.com/jwilger/eventcore/pull/193))
 
 ### Miscellaneous Tasks
 
@@ -111,4 +111,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Refactoring
 
 - reorganize workspace per ADR-022 for feature flag re-exports ([#188](https://github.com/jwilger/eventcore/pull/188))
-- *(types)* use UUID7 event IDs as global positions ([#197](https://github.com/jwilger/eventcore/pull/197))
+- _(types)_ use UUID7 event IDs as global positions ([#197](https://github.com/jwilger/eventcore/pull/197))

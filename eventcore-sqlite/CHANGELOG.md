@@ -3,11 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1.html).
 
 ## [Unreleased]
 
-## [2.0.0](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v1.0.0...eventcore-sqlite-v2.0.0) - 2026-06-15
+## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v1.0.0...eventcore-sqlite-v1.0.1) - 2026-06-15
 
 ### Documentation
 
@@ -18,8 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-- *(eventcore-types)* glob pattern matching for subscriptions ([#246](https://git.johnwilger.com/Slipstream/eventcore/pulls/246)) ([#410](https://git.johnwilger.com/Slipstream/eventcore/pulls/410))
-- *(eventcore)* [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
+- _(eventcore-types)_ glob pattern matching for subscriptions ([#246](https://git.johnwilger.com/Slipstream/eventcore/pulls/246)) ([#410](https://git.johnwilger.com/Slipstream/eventcore/pulls/410))
+- _(eventcore)_ [**breaking**] streaming reads for read_stream ([#364](https://git.johnwilger.com/Slipstream/eventcore/pulls/364)) ([#414](https://git.johnwilger.com/Slipstream/eventcore/pulls/414))
 
 ### Miscellaneous Tasks
 
@@ -27,24 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
-- *(eventcore-sqlite)* batch INSERT in append_events ([#362](https://git.johnwilger.com/Slipstream/eventcore/pulls/362)) ([#404](https://git.johnwilger.com/Slipstream/eventcore/pulls/404))
+- _(eventcore-sqlite)_ batch INSERT in append_events ([#362](https://git.johnwilger.com/Slipstream/eventcore/pulls/362)) ([#404](https://git.johnwilger.com/Slipstream/eventcore/pulls/404))
 - serialize events once in the append path ([#361](https://git.johnwilger.com/Slipstream/eventcore/pulls/361)) ([#408](https://git.johnwilger.com/Slipstream/eventcore/pulls/408))
 
 ## [0.8.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v0.8.0...eventcore-sqlite-v0.8.1) - 2026-06-13
 
 ### Miscellaneous Tasks
 
-- *(ci)* complete Forgejo migration and adopt auto_review ([#386](https://git.johnwilger.com/Slipstream/eventcore/pulls/386))
+- _(ci)_ complete Forgejo migration and adopt auto_review ([#386](https://git.johnwilger.com/Slipstream/eventcore/pulls/386))
 
 ### Deps
 
-- *(deps)* bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
+- _(deps)_ bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://git.johnwilger.com/Slipstream/eventcore/pulls/383))
 
 ## [0.8.0](https://github.com/jwilger/eventcore/compare/eventcore-sqlite-v0.7.1...eventcore-sqlite-v0.8.0) - 2026-04-27
 
 ### Features
 
-- *(sqlite)* make encryption opt-in, re-export rusqlite, add BYOC constructors ([#379](https://github.com/jwilger/eventcore/pull/379))
+- _(sqlite)_ make encryption opt-in, re-export rusqlite, add BYOC constructors ([#379](https://github.com/jwilger/eventcore/pull/379))
 
 ### Breaking Changes
 
