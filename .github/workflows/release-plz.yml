@@ -1,0 +1,41 @@
+# Release management (release-plz), phases 1 and 2, per ADR-025.
+#
+# Replaces the former two-file Forgejo pair (release-plz.yml + publish.yml)
+# with a single call into the org's shared two-phase release-plz reusable
+# workflow, which was generalized directly from this repo's own Forgejo
+# workflows (see slipstream-code-new/gha-workflows commit history) and
+# already implements both phases as independent, idempotent jobs:
+#
+#   - release-pr: runs `release-plz release-pr` on every push to main. It is
+#     a no-op when there is nothing new to release, which is what prevents
+#     the infinite loop that the old Forgejo workflow guarded against with an
+#     explicit `startsWith(head_commit.message, 'chore(release):')` check.
+#   - release: runs `release-plz release` on every push to main, publishing
+#     all workspace crates (in the dependency order defined by
+#     release-plz.toml) and creating the GitHub release once a release PR has
+#     merged. Also a no-op when there is nothing new to publish.
+#
+# Both jobs mint their own git-write token from the org GitHub App and
+# SSH-sign commits/tags with RELEASE_SIGNING_KEY, so the resulting commit
+# satisfies main's required-signed-commits branch protection without this
+# repo needing to carry its own git-auth/git-signing/release-PR shell
+# scripts (formerly .forgejo/scripts/*.sh) -- that logic now lives once in
+# gha-workflows instead of being duplicated per repo.
+
+name: Release (release-plz)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  release-plz:
+    name: release-plz
+    uses: slipstream-code-new/gha-workflows/.github/workflows/rust-release-plz.yml@main
+    with:
+      runs-on: self-hosted-gregor
+    secrets:
+      cargo-registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      release-signing-key: ${{ secrets.RELEASE_SIGNING_KEY }}

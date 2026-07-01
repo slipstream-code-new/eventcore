@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -17,7 +19,7 @@ env:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
     steps:
@@ -32,13 +34,13 @@ jobs:
               - '**/Cargo.toml'
               - '**/Cargo.lock'
               - 'rust-toolchain.toml'
-              - '.forgejo/workflows/ci.yml'
+              - '.github/workflows/ci.yml'
 
   test:
     name: Test
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     services:
       postgres:
@@ -83,7 +85,7 @@ jobs:
 
   format:
     name: Format
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -99,7 +101,7 @@ jobs:
     name: Clippy
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -120,7 +122,7 @@ jobs:
     if: >-
       needs.changes.outputs.rust == 'true' &&
       contains(github.event.pull_request.labels.*.name, 'release')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:17
@@ -144,7 +146,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-mutants
-        run: cargo install cargo-mutants --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -180,7 +184,7 @@ jobs:
       - name: Create issues for surviving mutants
         if: steps.mutants.outputs.has_survivors == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
@@ -197,8 +201,6 @@ jobs:
             echo "No surviving mutants parsed from output"
             exit 0
           fi
-
-          api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/issues"
 
           for file in "${!by_file[@]}"; do
             mutants="${by_file[$file]}"
@@ -225,17 +227,7 @@ jobs:
             body+="- Release PR: #${PR_NUMBER}"$'\n'
             body+="- Full mutation report: see workflow artifacts"$'\n'
 
-            payload=$(jq -n \
-              --arg title "$title" \
-              --arg body "$body" \
-              '{title: $title, body: $body, labels: ["P0-critical", "bug"]}')
-
-            curl -fsSL -X POST \
-              -H "Authorization: token ${GITHUB_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -H "Accept: application/json" \
-              "${api}" \
-              -d "$payload"
+            gh issue create --title "$title" --body "$body" --label "P0-critical" --label "bug"
 
             echo "Created issue for ${count} surviving mutants in ${file}"
           done
@@ -247,51 +239,11 @@ jobs:
           echo "All mutants must be killed before this release can proceed."
           exit 1
 
-  semantic-review:
-    name: Request auto_review semantic review
-    if: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      AUTO_REVIEW_GATEWAY_URL: ${{ vars.AUTO_REVIEW_GATEWAY_URL }}
-      AR_CI_REVIEW_TOKEN: ${{ secrets.AR_CI_REVIEW_TOKEN }}
-    steps:
-      - name: Skip when auto_review configuration is not available
-        if: ${{ env.AUTO_REVIEW_GATEWAY_URL == '' || env.AR_CI_REVIEW_TOKEN == '' || env.AUTO_REVIEW_GATEWAY_URL == github.server_url }}
-        run: |
-          echo "auto_review semantic review skipped: repository variable AUTO_REVIEW_GATEWAY_URL must point at ar-gateway, secret AR_CI_REVIEW_TOKEN must match the gateway AR_CI_REVIEW_TOKEN, and the gateway URL must not be the Forgejo server URL"
-
-      - name: Request auto_review review
-        continue-on-error: true
-        if: ${{ env.AUTO_REVIEW_GATEWAY_URL != '' && env.AR_CI_REVIEW_TOKEN != '' && env.AUTO_REVIEW_GATEWAY_URL != github.server_url }}
-        run: |
-          set -euo pipefail
-          json_payload='{"owner":"${{ github.repository_owner }}","repo":"${{ github.event.repository.name }}","pr_number":${{ github.event.pull_request.number }},"head_sha":"${{ github.event.pull_request.head.sha }}"}'
-          response_file="$(mktemp)"
-          status="$(curl -sS --connect-timeout 5 --max-time 30 -o "$response_file" -w '%{http_code}' -X POST \
-            -H "Authorization: Bearer $AR_CI_REVIEW_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data "$json_payload" \
-            "${AUTO_REVIEW_GATEWAY_URL%/}/reviews/ci")"
-
-          if [ "$status" -eq 401 ] || [ "$status" -eq 403 ]; then
-            echo "auto_review semantic review authorization failed with HTTP $status; verify the AR_CI_REVIEW_TOKEN secret matches production AR_CI_REVIEW_TOKEN" >&2
-            exit 1
-          fi
-
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "auto_review semantic review request failed with HTTP $status" >&2
-            cat "$response_file" >&2
-            exit 1
-          fi
-
-          echo "auto_review semantic review requested"
-
   security-audit:
     name: Security Audit
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -310,7 +262,7 @@ jobs:
     name: CI Gate
     if: always()
     needs: [changes, test, format, clippy, mutation, security-audit]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Check job results
         run: |
