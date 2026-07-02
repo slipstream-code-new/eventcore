@@ -39,7 +39,7 @@ jobs:
     name: release-plz
     uses: slipstream-eng/gha-workflows/.github/workflows/rust-release-plz.yml@main
     with:
-      runs-on: self-hosted-gregor
+      runs-on: ubuntu-latest
     secrets:
       cargo-registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       release-signing-key: ${{ secrets.RELEASE_SIGNING_KEY }}
