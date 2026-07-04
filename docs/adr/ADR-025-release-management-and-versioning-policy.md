@@ -12,7 +12,7 @@ implemented policy.
 
 EventCore is a Rust workspace with nine published crates distributed via crates.io:
 
-```
+```text
 eventcore/                    (main entry point - facade with re-exports)
 eventcore-types/              (shared vocabulary - traits and types)
 eventcore-macros/             (proc-macros for derive(Command))
@@ -26,7 +26,7 @@ eventcore-examples/           (published example and integration-test crate)
 
 These crates have complex interdependencies defined by ADR-022's feature flag architecture:
 
-```
+```text
 eventcore → eventcore-types (always)
 eventcore → eventcore-postgres (via feature flag)
 eventcore → eventcore-sqlite (via feature flag)
@@ -118,7 +118,7 @@ Use release-plz for automation because:
 
 Publication SHALL follow dependency graph order to prevent "missing dependency version" errors:
 
-```
+```text
 Step 1: eventcore-types
   ↓
 Step 2: eventcore-macros, eventcore-postgres, eventcore-sqlite, eventcore-fs,
