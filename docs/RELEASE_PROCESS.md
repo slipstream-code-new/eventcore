@@ -6,7 +6,7 @@ This document describes the release process for the EventCore workspace.
 
 The project uses **[release-plz](https://release-plz.dev/)** for fully automated releases with a two-phase workflow (see ADR-025):
 
-**Phase 1: Release PR Creation** (`.forgejo/workflows/release-plz.yml`)
+**Phase 1: Release PR Creation** (`.github/workflows/release-plz.yml`, `release-pr` job in the shared workflow)
 
 - Triggered on push to `main` (except release PR merges)
 - Analyzes commits using conventional commits for semver detection
@@ -14,18 +14,18 @@ The project uses **[release-plz](https://release-plz.dev/)** for fully automated
 - Creates/updates release PR with version bumps and changelog
 - PR must pass all CI quality gates before merge
 
-**Phase 2: Publication** (`.forgejo/workflows/publish.yml`)
+**Phase 2: Publication** (`.github/workflows/release-plz.yml`, `release` job in the shared workflow)
 
 - Triggered when release PR is merged (commit message starts with "chore(release):")
 - Publishes crates to crates.io in dependency order
-- Creates Forgejo release with aggregated changelog
+- Creates GitHub releases with aggregated changelog content
 - Creates git tags for the release
 
 This ensures reliable, automated releases without manual intervention while maintaining:
 
 - Correct dependency ordering during publishing (release-plz)
 - Retry logic with exponential backoff for transient failures (release-plz)
-- Consistent changelog generation and Forgejo releases (release-plz)
+- Consistent changelog generation and GitHub releases (release-plz)
 - Automated version management and PR creation (release-plz)
 - Quality gates enforcement (CI must pass before release PR can merge)
 
@@ -45,8 +45,9 @@ release-plz automatically determines and uses the correct publishing order based
 6. `eventcore-postgres` (depends on eventcore-types)
 7. `eventcore-sqlite` (depends on eventcore-types)
 8. `eventcore-fs` (depends on eventcore-types)
+9. `eventcore-examples` (published example/test crate)
 
-**Note:** All eight library crates above (`eventcore-types`, `eventcore-macros`, `eventcore`, `eventcore-testing`, `eventcore-memory`, `eventcore-postgres`, `eventcore-sqlite`, and `eventcore-fs`) are published to crates.io; the workspace graduated to 1.0.0 in its first stable release. The non-library crates (`eventcore-demo`, `eventcore-bench`, `eventcore-stress`) set `publish = false` and are not published.
+**Note:** All nine crates above (`eventcore-types`, `eventcore-macros`, `eventcore`, `eventcore-testing`, `eventcore-memory`, `eventcore-postgres`, `eventcore-sqlite`, `eventcore-fs`, and `eventcore-examples`) are published to crates.io; the workspace graduated to 1.0.0 in its first stable release. The internal runnable/tooling crates (`eventcore-demo`, `eventcore-bench`, `eventcore-stress`) set `publish = false` and are not published.
 
 release-plz publishes crates in dependency order and retries transient failures with exponential backoff (3 attempts). There is no fixed inter-crate delay in the workflow.
 
@@ -131,6 +132,11 @@ cd eventcore
 cargo publish
 cd ..
 
+cd eventcore-examples
+cargo publish
+cd ..
+# Wait for crates.io to index the package
+
 # 3. Create git tags for the release (if not already created)
 # Note: release-plz usually creates these tags automatically
 git tag -a eventcore-v0.X.Y -m "Release eventcore v0.X.Y"
@@ -141,8 +147,9 @@ git tag -a eventcore-memory-v0.X.Y -m "Release eventcore-memory v0.X.Y"
 git tag -a eventcore-postgres-v0.X.Y -m "Release eventcore-postgres v0.X.Y"
 git tag -a eventcore-sqlite-v0.X.Y -m "Release eventcore-sqlite v0.X.Y"
 git tag -a eventcore-fs-v0.X.Y -m "Release eventcore-fs v0.X.Y"
+git tag -a eventcore-examples-v0.X.Y -m "Release eventcore-examples v0.X.Y"
 
-# 4. Push tags to Forgejo
+# 4. Push tags to GitHub
 git push origin --tags
 ```
 
@@ -161,7 +168,7 @@ This separation prevents manual version bumps from triggering immediate publishi
 
 ### crates.io Publishing Token
 
-The automated workflow uses a `CARGO_REGISTRY_TOKEN` stored as a Forgejo Actions secret (set at the Slipstream organization level) to authenticate with crates.io during publishing.
+The automated workflow uses a `CARGO_REGISTRY_TOKEN` stored as a GitHub Actions secret (set at the Slipstream organization or repository level) to authenticate with crates.io during publishing.
 
 **Required permissions:**
 
@@ -190,13 +197,13 @@ To rotate the crates.io publishing token:
    - Log in to [crates.io](https://crates.io/)
    - Navigate to Account Settings → API Tokens
    - Click "New Token"
-   - Name: `Slipstream Forgejo Actions` (or similar)
+   - Name: `Slipstream GitHub Actions` (or similar)
    - Scopes: `publish-update` (allows publishing new versions)
    - Click "Generate"
    - Copy the token immediately (it won't be shown again)
 
-2. **Update Forgejo Actions secret:**
-   - Navigate to the Slipstream organization Settings → Actions → Secrets
+2. **Update GitHub Actions secret:**
+   - Navigate to the Slipstream organization or repository Settings → Secrets and variables → Actions
    - Find `CARGO_REGISTRY_TOKEN` in organization secrets
    - Click "Edit" and paste the new token
    - Save changes
@@ -209,7 +216,7 @@ To rotate the crates.io publishing token:
 
 4. **Verify new token works:**
    - Trigger a test release or wait for the next automated release
-   - Monitor the Forgejo Actions workflow logs
+   - Monitor the GitHub Actions workflow logs
    - Verify successful authentication and publishing
 
 **Recommended rotation schedule:**
@@ -238,7 +245,7 @@ If you see errors about version requirements not being met:
 
 If you see "no token found" or "authentication failed" errors:
 
-1. Verify `CARGO_REGISTRY_TOKEN` is set in Forgejo Actions secrets (Slipstream organization level)
+1. Verify `CARGO_REGISTRY_TOKEN` is set in GitHub Actions secrets (Slipstream organization or repository level)
 2. Check that the token hasn't expired or been revoked on crates.io
 3. Verify the token has `publish-update` permissions
 4. Rotate the token following the credential rotation procedure above

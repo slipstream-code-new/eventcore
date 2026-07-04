@@ -207,6 +207,6 @@ Specific compliance documentation is in development.
 
 For non-security questions, please use:
 
-- [Forgejo Issues](https://git.johnwilger.com/Slipstream/eventcore/issues) for bug reports and feature requests
+- [GitHub Issues](https://github.com/slipstream-eng/eventcore/issues) for bug reports and feature requests
 
 For security issues, use only the private email reporting process described above.

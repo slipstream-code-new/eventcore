@@ -1,6 +1,6 @@
 # EventCore
 
-`eventcore` is a type-safe event sourcing library for Rust implementing multi-stream atomic event sourcing with dynamic consistency boundaries. It is a Rust Cargo workspace with 8 published library crates (plus internal demo, bench, and stress tooling crates) providing the core library, derive macros, multiple backend implementations, and a testing toolkit.
+`eventcore` is a type-safe event sourcing library for Rust implementing multi-stream atomic event sourcing with dynamic consistency boundaries. It is a Rust Cargo workspace with 9 published crates (8 library/support crates plus the published examples crate; internal demo, bench, and stress tooling crates are not published) providing the core library, derive macros, multiple backend implementations, examples, and a testing toolkit.
 
 ## Workspace Structure
 
@@ -93,23 +93,21 @@ Use `/core:develop` skill. Follow outside-in TDD:
 
 ## Work Tracking Across Sessions
 
-### Forgejo Issues
+### GitHub Issues
 
-All work items, feature requests, and bug reports are tracked as Forgejo
-Issues at `git.johnwilger.com/jwilger/eventcore`. At the start of each
+All work items, feature requests, and bug reports are tracked as GitHub
+Issues at `github.com/slipstream-eng/eventcore`. At the start of each
 development session, check open issues to understand current priorities.
 
-Use the `tea` CLI or direct `curl` calls to the Forgejo REST API
-(`/api/v1/repos/jwilger/eventcore/issues`) to read and manage issues. There
-is no Forgejo MCP plugin; the previously documented
-`mcp__plugin_github_github__*` tools no longer apply.
+Use the `gh` CLI or direct calls to the GitHub REST API
+(`/repos/slipstream-eng/eventcore/issues`) to read and manage issues.
 
 ### Session Continuity
 
 At the start of each session:
 
 1. Read MEMORY.md for cross-session context about in-progress work
-2. Check Forgejo Issues for current priorities and assignments
+2. Check GitHub Issues for current priorities and assignments
 3. Scan blueprint statuses for partially completed work (if blueprints exist)
 4. Resume where the previous session left off
 

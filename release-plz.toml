@@ -5,30 +5,18 @@ release_always = true
 # Allow dirty working directory (for CI)
 allow_dirty = true
 
-# Dependencies update
-# TODO: Re-enable after initial release (temporarily disabled because workspace dependencies are not yet published to crates.io)
+# Dependency updates are handled outside release PRs; release-plz should only
+# prepare version bumps, changelogs, tags, and publication.
 dependencies_update = false
 
-# IMPORTANT: Lockstep major/minor versioning enforcement
-# Per ADR-025, all workspace crates must share identical major.minor versions.
-# release-plz analyzes each crate independently for semver bumps, which can
-# create version skew (e.g., one crate at 0.3.0, others at 0.2.x).
-#
-# The workflow enforces lockstep policy in three steps:
-# 1. release-plz update: Analyze commits and update versions based on semver
-# 2. enforce-lockstep-versions.sh: Adjust all crates to highest major.minor
-# 3. release-plz release-pr: Create PR with lockstep-enforced versions
-#
-# CI validates lockstep compliance on all PRs via validate-lockstep-versions.sh
-
-# Note: Due to failed release attempts, v0.1.1 and v0.1.2 tags exist but weren't fully published.
-# The workspace is at v0.1.3 to bypass these issues.
+# IMPORTANT: Full lockstep versioning
+# Per ADR-025, all published workspace crates share the exact same
+# major.minor.patch version via Cargo workspace version inheritance.
 
 # Git configuration
-git_release_enable = true  # Create Forgejo releases per crate
+git_release_enable = true  # Create GitHub releases per crate
 git_tag_enable = true      # Create git tags per crate
-git_tag_name = "{{ package }}-v{{ version }}"  # Per-crate tags: eventcore-v0.2.1, eventcore-types-v0.2.0
-# This supports ADR-025's independent patch versioning policy (lockstep major.minor, independent patch)
+git_tag_name = "{{ package }}-v{{ version }}"  # Per-crate tags: eventcore-v1.0.1, eventcore-types-v1.0.1
 
 # PR configuration
 pr_labels = ["release", "automated"]
@@ -65,14 +53,18 @@ protect_breaking_commits = true
 
 # Package-specific configuration
 #
-# IMPORTANT: Package order in this file defines publication order (ADR-025)
-# release-plz publishes in dependency order to prevent "missing dependency" errors
+# IMPORTANT: release-plz publishes in dependency order to prevent
+# "missing dependency" errors. The package-specific sections below customize
+# changelog behavior for the core crates; unlisted published packages use
+# release-plz defaults.
 #
 # Dependency graph (bottom-up publication):
 # 1. eventcore-types (no internal dependencies)
 # 2. eventcore-macros (no internal dependencies)
-# 3. eventcore-testing, eventcore-memory, eventcore-postgres (depend on eventcore-types)
-# 4. eventcore (depends on all via feature flags)
+# 3. eventcore-testing, eventcore-memory, eventcore-postgres, eventcore-sqlite,
+#    eventcore-fs (depend on eventcore-types)
+# 4. eventcore (depends on types, macros, and optional adapters)
+# 5. eventcore-examples (published example/integration-test crate)
 #
 # See ADR-025 for versioning policy and rationale
 

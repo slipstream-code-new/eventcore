@@ -4,17 +4,24 @@
 
 accepted
 
+Updated 2026-07-04: EventCore now has nine published crates at 1.x, the
+release workflow runs in GitHub Actions, and full lockstep versioning is the
+implemented policy.
+
 ## Context
 
-EventCore is a Rust workspace with six published crates distributed via crates.io:
+EventCore is a Rust workspace with nine published crates distributed via crates.io:
 
 ```
 eventcore/                    (main entry point - facade with re-exports)
 eventcore-types/              (shared vocabulary - traits and types)
 eventcore-macros/             (proc-macros for derive(Command))
 eventcore-postgres/           (PostgreSQL adapter implementation)
+eventcore-sqlite/             (SQLite adapter implementation)
+eventcore-fs/                 (file-based, git-mergeable event store)
 eventcore-testing/            (test utilities and contract test suite)
 eventcore-memory/             (in-memory storage for testing)
+eventcore-examples/           (published example and integration-test crate)
 ```
 
 These crates have complex interdependencies defined by ADR-022's feature flag architecture:
@@ -22,10 +29,14 @@ These crates have complex interdependencies defined by ADR-022's feature flag ar
 ```
 eventcore → eventcore-types (always)
 eventcore → eventcore-postgres (via feature flag)
+eventcore → eventcore-sqlite (via feature flag)
 eventcore → eventcore-macros (via feature flag)
 eventcore-postgres → eventcore-types
+eventcore-sqlite → eventcore-types
+eventcore-fs → eventcore-types
 eventcore-testing → eventcore-types
 eventcore-memory → eventcore-types
+eventcore-examples → workspace crates (dev-dependencies for published examples)
 ```
 
 **Key Forces:**
@@ -34,24 +45,23 @@ eventcore-memory → eventcore-types
 2. **crates.io Immutability**: Once published, crate versions are permanent and cannot be unpublished (only yanked, which breaks existing builds)
 3. **Dependency Order Constraints**: Must publish eventcore-types before eventcore-postgres, and eventcore-postgres before eventcore, or publication fails with missing dependency errors
 4. **Partial Failure Risk**: If publication fails mid-release (network errors, crates.io downtime, credential issues), some crates may be published while others remain at old versions, creating version skew
-5. **Maintainer Cognitive Load**: Manual versioning across six Cargo.toml files is error-prone - easy to forget a crate or introduce version mismatches
-6. **Patch Independence Need**: A bug fix in eventcore-postgres shouldn't require releasing eventcore 0.2.1 when eventcore code hasn't changed
+5. **Maintainer Cognitive Load**: Manual versioning across workspace `Cargo.toml` files is error-prone - easy to forget a crate or introduce version mismatches
+6. **Patch Simplicity Need**: A bug fix in one crate should not require custom release scripting or a compatibility matrix to keep the workspace coherent
 7. **Quality Gate Integration**: Release workflow must respect existing CI gates (nextest, clippy, format, mutation@80%, security-audit) to prevent publishing broken code
 8. **Two-Phase Review Need**: Maintainers want to preview version bumps and changelog before committing to publication (crates.io releases are irreversible)
 9. **GitHub Release Expectations**: Rust ecosystem conventions include GitHub releases with change summaries linking to crates.io
 10. **Nix Development Environment**: Pinned toolchains in `nix develop` mean release tooling must work within Nix shell constraints
 
-**Current State:**
+**Current State (updated 2026-07-04):**
 
-- All workspace crates manually synchronized to version 0.2.0 (as of 2025-12-23)
-- No automation exists for version bumping or publication
-- Releases performed manually via `cargo publish` with dependency-order awareness
-- No changelog generation or release note automation
-- Version skew previously occurred (eventcore 0.1.8 while dependencies at 0.1.0)
+- All published workspace crates are synchronized to version 1.0.1 (latest release as of 2026-06-15)
+- Version bumping, changelog updates, crate publication, git tags, and GitHub releases are handled by release-plz through GitHub Actions
+- The root `[workspace.package] version` is the single source of truth for published crate versions
+- Version skew previously occurred (eventcore 0.1.8 while dependencies at 0.1.0), which remains the failure mode this ADR prevents
 
 **Why This Decision Now:**
 
-The workspace has reached six published crates with active development. Manual versioning has already caused version skew issues. Before the next release, we must establish automation to prevent human error and reduce maintainer burden.
+The workspace has multiple published crates with active development. Manual versioning has already caused version skew issues. Release automation prevents human error and reduces maintainer burden.
 
 ## Decision
 
@@ -88,8 +98,10 @@ Initial ADR proposed lockstep major/minor with independent patches. Implementati
 **Phase 2: Publish to crates.io (on release PR merge)**
 - release-plz publishes crates in dependency order:
   1. eventcore-types (no EventCore dependencies)
-  2. eventcore-macros, eventcore-postgres, eventcore-testing, eventcore-memory (depend on eventcore-types)
-  3. eventcore (depends on all via feature flags)
+  2. eventcore-macros (proc macros)
+  3. eventcore-testing, eventcore-memory, eventcore-postgres, eventcore-sqlite, eventcore-fs (depend on eventcore-types)
+  4. eventcore (depends on types, macros, and optional adapters via feature flags)
+  5. eventcore-examples (published example and integration-test crate)
 - Creates GitHub release with combined changelog
 - Tags repository with release version
 
@@ -109,9 +121,12 @@ Publication SHALL follow dependency graph order to prevent "missing dependency v
 ```
 Step 1: eventcore-types
   ↓
-Step 2: eventcore-macros, eventcore-postgres, eventcore-testing, eventcore-memory (parallel)
+Step 2: eventcore-macros, eventcore-postgres, eventcore-sqlite, eventcore-fs,
+        eventcore-testing, eventcore-memory (parallel where dependency-safe)
   ↓
 Step 3: eventcore
+  ↓
+Step 4: eventcore-examples
 ```
 
 ### 5. Failure Handling
@@ -226,7 +241,7 @@ Direct publish on every main commit would:
 **Technical Requirement:**
 crates.io validates dependencies at publish time. If we publish:
 1. eventcore first (depends on eventcore-postgres 0.2.1)
-2. eventcore-postgres not yet published at 0.2.1
+2. eventcore-postgres 0.2.1 missing from crates.io
 3. Publish fails: "dependency eventcore-postgres 0.2.1 not found"
 
 **Solution:**
@@ -256,7 +271,7 @@ Transient failures (network hiccups, crates.io temporary overload) shouldn't req
 
 - **Reduced Human Error**: Automation prevents version skew and forgotten Cargo.toml updates
 - **Clear Compatibility Guarantee**: Matching major/minor versions = compatible crates
-- **Faster Patch Releases**: Independent patch versions avoid unnecessary releases
+- **Simpler Patch Releases**: Full lockstep avoids custom patch-version orchestration and keeps compatibility obvious
 - **Quality Assurance**: Release PR must pass CI before merge (prevents broken releases)
 - **Maintainer Control**: Preview version bumps and changelog before irreversible publication
 - **Idempotent Recovery**: Re-running publish workflow after partial failure is safe
@@ -304,11 +319,13 @@ Allow each crate to version independently (eventcore 0.5.0, eventcore-types 0.3.
 
 All crates always maintain identical major.minor.patch versions.
 
-**Why Rejected:**
-- **Unnecessary Releases**: Bug fix in eventcore-postgres forces eventcore 0.2.1 even if eventcore unchanged
-- **Changelog Noise**: eventcore 0.2.1 changelog says "no changes" or repeats eventcore-postgres changes
-- **Slower Patch Turnaround**: Must coordinate workspace-wide release for single crate bug fix
-- **Industry Anti-Pattern**: Most workspace projects (tokio, serde) allow independent patches
+**Original assessment:** Rejected because it creates version bump noise when only
+one crate changes.
+
+**Updated 2025-12-27:** Adopted after implementation work showed that
+independent patches required custom enforcement scripts and fought release-plz's
+workspace behavior. Native Cargo workspace version inheritance gives a simpler
+and more reliable compatibility guarantee.
 
 ### Alternative 3: Immediate Publish on Main Commit
 
@@ -326,7 +343,7 @@ Maintainer manually edits Cargo.toml versions, automation only handles publicati
 
 **Why Rejected:**
 - **Human Error**: Manual version bumping already caused version skew (eventcore 0.1.8, others 0.1.0)
-- **Maintainer Burden**: Must remember to update six Cargo.toml files correctly
+- **Maintainer Burden**: Must remember to update multiple `Cargo.toml` files correctly
 - **Semver Mistakes**: Easy to forget breaking change requires major bump, not minor
 - **No Changelog Automation**: Manually written changelogs often incomplete or inconsistent
 
