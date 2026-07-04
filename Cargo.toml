@@ -19,7 +19,7 @@ resolver = "2"
 version = "1.0.1"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/slipstream-code-new/eventcore"
+repository = "https://github.com/slipstream-eng/eventcore"
 
 [workspace.lints.rust]
 dead_code = "forbid"

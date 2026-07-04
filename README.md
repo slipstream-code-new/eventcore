@@ -1,14 +1,8 @@
 # EventCore
 
-[![CI](https://git.johnwilger.com/Slipstream/eventcore/badges/workflows/ci.yml/badge.svg?branch=main)](https://git.johnwilger.com/Slipstream/eventcore/actions)
+[![CI](https://github.com/slipstream-eng/eventcore/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/slipstream-eng/eventcore/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/eventcore.svg)](https://crates.io/crates/eventcore)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-> **⚠️ EXPERIMENTAL - NOT READY FOR USE**
->
-> This project is in early development. APIs are unstable and subject to breaking changes.
-> The library is not yet published to crates.io, and referenced packages/examples may be incomplete or non-existent.
->
-> **Do not use this in production or depend on it for any real projects.**
 
 A type-safe event sourcing library implementing **multi-stream event sourcing** with dynamic consistency boundaries - commands that can atomically read from and write to multiple event streams.
 
@@ -23,9 +17,7 @@ Traditional event sourcing forces you into rigid aggregate boundaries. EventCore
 
 ## Quick Start
 
-> **Note:** EventCore is not yet published to crates.io (see the banner above).
-> The snippet below shows how dependencies will be declared and matches the
-> current API.
+EventCore and its companion crates are published on crates.io.
 
 ```toml
 # Cargo.toml

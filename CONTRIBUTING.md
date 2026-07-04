@@ -9,8 +9,8 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://git.johnwilger.com/YOUR_USERNAME/eventcore.git`
-3. Add upstream remote: `git remote add upstream https://git.johnwilger.com/Slipstream/eventcore.git`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/eventcore.git`
+3. Add upstream remote: `git remote add upstream https://github.com/slipstream-eng/eventcore.git`
 4. Create a feature branch: `git checkout -b my-feature-branch`
 
 ## Development Setup
@@ -106,7 +106,7 @@ While not required, we encourage contributors to sign their commits with GPG for
    - Choose RSA and RSA (default)
    - Key size: 4096 bits
    - Expiration: Your preference (1-2 years recommended)
-   - Use the email address associated with your Forgejo account
+   - Use the email address associated with your GitHub account
 
 2. **List your GPG keys**:
 
@@ -124,7 +124,7 @@ While not required, we encourage contributors to sign their commits with GPG for
 
    Copy the output including `-----BEGIN PGP PUBLIC KEY BLOCK-----` and `-----END PGP PUBLIC KEY BLOCK-----`
 
-4. **Add the key to Forgejo**:
+4. **Add the key to GitHub**:
    - Go to Settings → SSH / GPG Keys
    - Click "Add Key" under "Manage GPG Keys"
    - Paste your public key
@@ -212,21 +212,21 @@ Keep hooks green before pushing.
 
 1. **Create a feature branch** from `main`: `git checkout -b type/description`
 2. **Make commits** using Conventional Commits
-3. **Push and create a PR**: `git push -u origin <branch>` then `tea pr create`
-   (or open the PR via the Forgejo web UI link printed by `git push`)
+3. **Push and create a PR**: `git push -u origin <branch>` then `gh pr create`
+   (or open the PR from GitHub)
 4. **PRs are squash-merged** into `main`
 
 ### Best Practices
 
 1. **Small, focused PRs** - Each PR should be independently reviewable
-2. **One issue per PR** - Link the Forgejo issue in the PR description
+2. **One issue per PR** - Link the GitHub issue in the PR description
 3. **Descriptive branch names** - e.g. `feat/add-user-model`
 4. **Submit early** - Create draft PRs to show intent
 
 ## Task Tracking
 
-This project uses **Forgejo Issues** at
-[git.johnwilger.com/Slipstream/eventcore](https://git.johnwilger.com/Slipstream/eventcore/issues)
+This project uses **GitHub Issues** at
+[github.com/slipstream-eng/eventcore](https://github.com/slipstream-eng/eventcore/issues)
 for all task tracking. See AGENTS.md for label conventions and CLI commands.
 
 ## Pull Request Process
@@ -321,7 +321,7 @@ When adding new features:
 
 ## Questions?
 
-- Open an [issue](https://git.johnwilger.com/Slipstream/eventcore/issues) for questions
+- Open an [issue](https://github.com/slipstream-eng/eventcore/issues) for questions
 - Check existing issues before creating new ones
 - Join our community chat (to be added)
 
