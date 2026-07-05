@@ -100,7 +100,7 @@
 //! # }
 //! ```
 //!
-//! From here, see the [user manual](https://git.johnwilger.com/Slipstream/eventcore)
+//! From here, see the [user manual](https://github.com/jwilger/eventcore)
 //! for projections, multi-stream atomicity, and backend selection, or the
 //! `eventcore-demo` crate for a complete bank application backed by PostgreSQL.
 //!

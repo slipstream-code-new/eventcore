@@ -1,8 +1,8 @@
-# Forgejo Issue Conventions
+# GitHub Issue Conventions
 
 ## Repository
 
-`git.johnwilger.com/jwilger/eventcore`
+`github.com/jwilger/eventcore`
 
 ## Issue Types
 
@@ -35,8 +35,8 @@
 
 ## Hierarchy and Relationships
 
-Forgejo does not have GitHub's "sub-issue" primitive. Two substitutes are
-available; pick whichever fits the situation:
+Use GitHub issue task lists or sub-issues where available. If sub-issues are not
+enabled, use task-list references in the parent issue body:
 
 ### Parent/Child (containment)
 
@@ -47,34 +47,26 @@ Use a checklist in the parent issue body:
 - [ ] #43 sub-task two
 ```
 
-Forgejo renders these as live links and updates the checkbox as referenced
-issues close. This is the closest analog to GitHub's sub-issues.
+GitHub renders these as live links and updates the checkbox as referenced issues
+close.
 
 ### Blocker Relationships
 
-Forgejo supports issue dependencies natively. Mark them via the REST API:
+Represent blockers with explicit issue links in the body, for example:
 
-```bash
-# Issue #28 is blocked by #15
-curl -fsSL -X POST \
-  -H "Authorization: token $FORGEJO_TOKEN" \
-  -H "Content-Type: application/json" \
-  "https://git.johnwilger.com/api/v1/repos/jwilger/eventcore/issues/28/dependencies" \
-  -d '{"index": 15}'
+```markdown
+Depends on: #15
 ```
 
-Or with `tea`:
-
-```bash
-tea issues edit 28 --add-dependency 15
-```
+When starting work, check referenced blockers with `gh issue view` before
+creating a branch.
 
 ## Issue Assignment
 
 When starting work on an issue, assign it to the current authenticated user.
 
 ```bash
-tea issues edit 42 --assignees @me
+gh issue edit 42 --repo jwilger/eventcore --add-assignee @me
 ```
 
 Or via REST:
@@ -83,7 +75,7 @@ Or via REST:
 curl -fsSL -X PATCH \
   -H "Authorization: token $FORGEJO_TOKEN" \
   -H "Content-Type: application/json" \
-  "https://git.johnwilger.com/api/v1/repos/jwilger/eventcore/issues/42" \
+  "https://api.github.com/repos/jwilger/eventcore/issues/42" \
   -d '{"assignees": ["jwilger"]}'
 ```
 

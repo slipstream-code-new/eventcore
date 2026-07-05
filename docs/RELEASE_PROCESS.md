@@ -168,7 +168,10 @@ This separation prevents manual version bumps from triggering immediate publishi
 
 ### crates.io Publishing Token
 
-The automated workflow uses a `CARGO_REGISTRY_TOKEN` stored as a GitHub Actions secret (set at the Slipstream organization or repository level) to authenticate with crates.io during publishing.
+The automated workflow uses `CARGO_REGISTRY_TOKEN` from the dedicated 1Password
+`Github Secrets` vault to authenticate with crates.io during publishing. GitHub
+Actions loads it through the repository-level `OP_SERVICE_ACCOUNT_TOKEN`
+bootstrap secret.
 
 **Required permissions:**
 
@@ -197,16 +200,16 @@ To rotate the crates.io publishing token:
    - Log in to [crates.io](https://crates.io/)
    - Navigate to Account Settings → API Tokens
    - Click "New Token"
-   - Name: `Slipstream GitHub Actions` (or similar)
+   - Name: `jwilger GitHub Actions` (or similar)
    - Scopes: `publish-update` (allows publishing new versions)
    - Click "Generate"
    - Copy the token immediately (it won't be shown again)
 
-2. **Update GitHub Actions secret:**
-   - Navigate to the Slipstream organization or repository Settings → Secrets and variables → Actions
-   - Find `CARGO_REGISTRY_TOKEN` in organization secrets
-   - Click "Edit" and paste the new token
-   - Save changes
+2. **Update 1Password runtime secret:**
+   - Open the `Github Secrets` 1Password vault
+   - Find `CARGO_REGISTRY_TOKEN`
+   - Replace the `credential` field with the new crates.io token
+   - GitHub Actions will load the value through `1password/load-secrets-action`
 
 3. **Revoke old token:**
    - Return to crates.io Account Settings → API Tokens
@@ -245,7 +248,7 @@ If you see errors about version requirements not being met:
 
 If you see "no token found" or "authentication failed" errors:
 
-1. Verify `CARGO_REGISTRY_TOKEN` is set in GitHub Actions secrets (Slipstream organization or repository level)
+1. Verify `CARGO_REGISTRY_TOKEN` is populated in the `Github Secrets` 1Password vault
 2. Check that the token hasn't expired or been revoked on crates.io
 3. Verify the token has `publish-update` permissions
 4. Rotate the token following the credential rotation procedure above
