@@ -1,6 +1,6 @@
 # EventCore
 
-[![CI](https://github.com/slipstream-eng/eventcore/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/slipstream-eng/eventcore/actions/workflows/ci.yml)
+[![CI](https://github.com/jwilger/eventcore/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jwilger/eventcore/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/eventcore.svg)](https://crates.io/crates/eventcore)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

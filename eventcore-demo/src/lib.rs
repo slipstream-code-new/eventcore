@@ -1,6 +1,6 @@
 //! # EventCore bank demo
 //!
-//! A small, runnable demonstration of [EventCore](https://git.johnwilger.com/Slipstream/eventcore)
+//! A small, runnable demonstration of [EventCore](https://github.com/jwilger/eventcore)
 //! with the PostgreSQL backend. It models a bank with three account-level
 //! commands ([`OpenAccount`], [`Deposit`], [`Withdraw`]) plus a multi-stream
 //! atomic [`Transfer`] — the centerpiece showing EventCore's signature

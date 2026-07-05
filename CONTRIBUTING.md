@@ -10,7 +10,7 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/eventcore.git`
-3. Add upstream remote: `git remote add upstream https://github.com/slipstream-eng/eventcore.git`
+3. Add upstream remote: `git remote add upstream https://github.com/jwilger/eventcore.git`
 4. Create a feature branch: `git checkout -b my-feature-branch`
 
 ## Development Setup
@@ -226,7 +226,7 @@ Keep hooks green before pushing.
 ## Task Tracking
 
 This project uses **GitHub Issues** at
-[github.com/slipstream-eng/eventcore](https://github.com/slipstream-eng/eventcore/issues)
+[github.com/jwilger/eventcore](https://github.com/jwilger/eventcore/issues)
 for all task tracking. See AGENTS.md for label conventions and CLI commands.
 
 ## Pull Request Process
@@ -321,7 +321,7 @@ When adding new features:
 
 ## Questions?
 
-- Open an [issue](https://github.com/slipstream-eng/eventcore/issues) for questions
+- Open an [issue](https://github.com/jwilger/eventcore/issues) for questions
 - Check existing issues before creating new ones
 - Join our community chat (to be added)
 

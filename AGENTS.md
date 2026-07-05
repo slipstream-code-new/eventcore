@@ -29,14 +29,14 @@
 14. Integration tests must read like docs — Given/When/Then comments, only public APIs, no private hooks or mocks of internals.
 15. Duplication inside tests is acceptable when it mirrors how downstream users compose commands and stores.
 16. Prefer existing tracing/logging helpers over ad-hoc `println!` debugging noise.
-17. All work items are tracked in **GitHub Issues** at `github.com/slipstream-eng/eventcore`; use the `gh` CLI or direct REST calls for automation.
+17. All work items are tracked in **GitHub Issues** at `github.com/jwilger/eventcore`; use the `gh` CLI or direct REST calls for automation.
 18. Keep pre-commit hooks green: rerun fmt/clippy/nextest locally until clean before committing.
 19. Use Conventional Commits for all git commit messages and PR titles (type/scope: summary) so history stays machine-readable.
 
 ## Issue Tracking with GitHub Issues
 
 **IMPORTANT**: This project uses **GitHub Issues** for ALL issue tracking,
-hosted at `github.com/slipstream-eng/eventcore`.
+hosted at `github.com/jwilger/eventcore`.
 
 ### Labels
 
@@ -62,7 +62,7 @@ hosted at `github.com/slipstream-eng/eventcore`.
 
 The `gh` CLI is the recommended interface. It must be authenticated once with
 `gh auth login`. Direct calls to the GitHub REST API at
-`/repos/slipstream-eng/eventcore/...` are equivalent when `gh` is unavailable.
+`/repos/jwilger/eventcore/...` are equivalent when `gh` is unavailable.
 
 **Check for work:**
 
