@@ -96,11 +96,11 @@ Use `/core:develop` skill. Follow outside-in TDD:
 ### GitHub Issues
 
 All work items, feature requests, and bug reports are tracked as GitHub
-Issues at `github.com/slipstream-eng/eventcore`. At the start of each
+Issues at `github.com/jwilger/eventcore`. At the start of each
 development session, check open issues to understand current priorities.
 
 Use the `gh` CLI or direct calls to the GitHub REST API
-(`/repos/slipstream-eng/eventcore/issues`) to read and manage issues.
+(`/repos/jwilger/eventcore/issues`) to read and manage issues.
 
 ### Session Continuity
 

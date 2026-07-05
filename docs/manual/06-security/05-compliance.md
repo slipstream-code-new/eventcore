@@ -7,7 +7,7 @@ reach for storage-layer or application-layer mechanisms instead.
 
 > **📋 Comprehensive Compliance Checklist**
 >
-> For a detailed compliance checklist covering OWASP, NIST, SOC2, PCI DSS, GDPR, and HIPAA requirements, see our [COMPLIANCE_CHECKLIST.md](https://github.com/slipstream-eng/eventcore/blob/main/COMPLIANCE_CHECKLIST.md).
+> For a detailed compliance checklist covering OWASP, NIST, SOC2, PCI DSS, GDPR, and HIPAA requirements, see our [COMPLIANCE_CHECKLIST.md](https://github.com/jwilger/eventcore/blob/main/COMPLIANCE_CHECKLIST.md).
 >
 > This checklist provides actionable items for achieving compliance with major security frameworks and regulations.
 
