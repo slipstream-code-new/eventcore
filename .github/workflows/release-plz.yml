@@ -3,7 +3,7 @@
 # Replaces the former two-file Forgejo pair (release-plz.yml + publish.yml)
 # with a single call into the org's shared two-phase release-plz reusable
 # workflow, which was generalized directly from this repo's own Forgejo
-# workflows (see slipstream-eng/gha-workflows commit history) and
+# workflows (see jwilger/gha-workflows commit history) and
 # already implements both phases as independent, idempotent jobs:
 #
 #   - release-pr: runs `release-plz release-pr` on every push to main. It is
@@ -37,9 +37,8 @@ permissions:
 jobs:
   release-plz:
     name: release-plz
-    uses: slipstream-eng/gha-workflows/.github/workflows/rust-release-plz.yml@main
+    uses: jwilger/gha-workflows/.github/workflows/rust-release-plz.yml@main
     with:
       runs-on: self-hosted-gregor
     secrets:
-      cargo-registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      release-signing-key: ${{ secrets.RELEASE_SIGNING_KEY }}
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
