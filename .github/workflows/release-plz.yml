@@ -15,12 +15,12 @@
 #     release-plz.toml) and creating the GitHub release once a release PR has
 #     merged. Also a no-op when there is nothing new to publish.
 #
-# Both jobs mint their own git-write token from the org GitHub App and
-# SSH-sign commits/tags with RELEASE_SIGNING_KEY, so the resulting commit
-# satisfies main's required-signed-commits branch protection without this
-# repo needing to carry its own git-auth/git-signing/release-PR shell
-# scripts (formerly .forgejo/scripts/*.sh) -- that logic now lives once in
-# gha-workflows instead of being duplicated per repo.
+# Both jobs load a git-write PAT and SSH-sign commits/tags with
+# RELEASE_SIGNING_KEY, so the resulting commit satisfies main's
+# required-signed-commits branch protection without this repo needing to carry
+# its own git-auth/git-signing/release-PR shell scripts (formerly
+# .forgejo/scripts/*.sh) -- that logic now lives once in gha-workflows instead
+# of being duplicated per repo.
 
 name: Release (release-plz)
 
