@@ -39,6 +39,6 @@ jobs:
     name: release-plz
     uses: jwilger/gha-workflows/.github/workflows/rust-release-plz.yml@main
     with:
-      runs-on: self-hosted-gregor
+      runs-on: ubuntu-latest
     secrets:
       op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
