@@ -44,6 +44,8 @@ jobs:
       - name: Load Trunk token
         id: load_secrets
         uses: 1password/load-secrets-action@3a12b0ab99d9cd590a3e9b5a90ea017210ed9556 # v4
+        with:
+          version: 2.34.1
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           TRUNK_API_TOKEN: op://Github Secrets/TRUNK_API_TOKEN/credential
